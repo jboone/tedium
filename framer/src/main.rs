@@ -2,6 +2,9 @@
 // (Hi, Apache license, am I doing this right?)
 
 use std::fs;
+use std::fs::File;
+
+use std::io::Write;
 
 struct Bits<'a> {
 	vec: &'a Vec<u8>,
@@ -50,6 +53,7 @@ enum State {
 fn main() {
 	let bytes = fs::read("test.u8").unwrap();
 	let source = Bits::new(&bytes);
+	let mut file_channels = File::create("channels_x24.u8").unwrap();
 
 	let mut bits = [0u32; 193];
 	let mut stats = [0u8;  193];
@@ -93,6 +97,8 @@ fn main() {
 						crc_expected = remainder;
 						remainder = 0;
 					}
+
+					file_channels.write_all(&channel).unwrap();
 
 					// Handle F bit
 					if (frame_n & 1) == 0 {
