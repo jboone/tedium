@@ -1,6 +1,5 @@
 EESchema Schematic File Version 4
-LIBS:breakout_xrt83l30-cache
-EELAYER 29 0
+EELAYER 30 0
 EELAYER END
 $Descr USLedger 17000 11000
 encoding utf-8
@@ -9,8 +8,8 @@ Title "XRT83L30 Breakout Board"
 Date "2019-07-22"
 Rev "20190722"
 Comp "ShareBrained Technology, Inc."
-Comment1 "Copyright (C) 2019"
-Comment2 "License to be determined"
+Comment1 "Copyright (C) 2019 Jared Boone"
+Comment2 "Licensed under CERN-OHL-P v2"
 Comment3 ""
 Comment4 ""
 $EndDescr
