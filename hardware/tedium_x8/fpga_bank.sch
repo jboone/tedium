@@ -2302,4 +2302,8 @@ Wire Wire Line
 	6150 5500 6550 5500
 Text HLabel 6550 5500 2    50   Output ~ 0
 PROGRAMN
+Text Notes 11500 5200 0    50   ~ 10
+TODO: Use 12M352 crystal because we're\nall about T1 for this project, because Adit.\nTODO: CASYNC not needed if not using E1?
+Text Notes 11500 5500 0    50   ~ 10
+TODO: Add USB-C CC1/2 pull-ups to\nrequest 3A @ 5V, discontinue DC jack use.\nTODO: Add VBUS overvoltage protection IC.
 $EndSCHEMATC

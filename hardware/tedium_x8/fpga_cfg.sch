@@ -2229,4 +2229,6 @@ Text HLabel 9850 3400 0    50   Input ~ 0
 PROGRAMN
 Text Notes 7650 7750 0    50   ~ 0
 RS232 TXD ->\nRS232 RXD <-\nRS232 RTS# ->\nRS232 CTS# <-
+Text Notes 10500 8500 0    50   ~ 10
+TODO: Add USB-C CC1/2 pull-ups to\nrequest 3A @ 5V, discontinue DC jack use.\nTODO: Add VBUS overvoltage protection IC.
 $EndSCHEMATC
