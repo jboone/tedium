@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "tedium"
+version = "0.1.0-dev.0"
+description = "Tedium (TDM) hardware interface"
+authors = ["Jared Boone <jared@sharebrained.com>"]
+license = "BSD"
+
+[tool.poetry.dependencies]
+python = "^3.7"
+pyusb = "^1.1.1"
+libusb1 = "^1.9.2"
+luna = {git = "https://github.com/greatscottgadgets/luna.git", branch = "main"}
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
