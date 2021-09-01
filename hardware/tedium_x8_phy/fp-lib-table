@@ -1,0 +1,7 @@
+(fp_lib_table
+  (lib (name "bel_fuse")(type "KiCad")(uri "${KIPRJMOD}/../libraries/bel_fuse.pretty")(options "")(descr ""))
+  (lib (name "ipc_capc")(type "KiCad")(uri "${KIPRJMOD}/../libraries/ipc_capc.pretty")(options "")(descr ""))
+  (lib (name "ipc_son")(type "KiCad")(uri "${KIPRJMOD}/../libraries/ipc_son.pretty")(options "")(descr ""))
+  (lib (name "littelfuse")(type "KiCad")(uri "${KIPRJMOD}/../libraries/littelfuse.pretty")(options "")(descr ""))
+  (lib (name "pulse")(type "KiCad")(uri "${KIPRJMOD}/../libraries/pulse.pretty")(options "")(descr ""))
+)
