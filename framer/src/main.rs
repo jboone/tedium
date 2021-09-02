@@ -1,5 +1,9 @@
-// Copyright 2019 Jared Boone
-// (Hi, Apache license, am I doing this right?)
+/*
+ * This file is part of Tedium.
+ *
+ * Copyright (C) 2020 Jared Boone <jared@sharebrained.com>
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 
 use std::fs;
 // use std::fs::File;
