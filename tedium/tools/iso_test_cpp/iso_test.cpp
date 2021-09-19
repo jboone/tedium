@@ -15,17 +15,19 @@
 const uint16_t VENDOR_ID  = 0x16d0;
 const uint16_t PRODUCT_ID = 0x0f3b;
 
-const uint8_t ISO_IN_ENDPOINT_NUMBER = 2;
-const uint8_t ISO_IN_ENDPOINT_ADDRESS = ISO_IN_ENDPOINT_NUMBER | LIBUSB_ENDPOINT_IN;
-const uint8_t ISO_IN_INTERFACE = 0;
-const unsigned int ISO_IN_TIMEOUT = 1000;
-const int NUM_ISO_IN_PACKETS = 16;
+const uint8_t INTERRUPT_ENDPOINT_NUMBER = 9;
 
-const uint8_t ISO_OUT_ENDPOINT_NUMBER = 3;
+const uint8_t ISO_OUT_ENDPOINT_NUMBER = 1;
 const uint8_t ISO_OUT_ENDPOINT_ADDRESS = ISO_OUT_ENDPOINT_NUMBER | LIBUSB_ENDPOINT_OUT;
 const uint8_t ISO_OUT_INTERFACE = 1;
 const unsigned int ISO_OUT_TIMEOUT = 1000;
 const int NUM_ISO_OUT_PACKETS = 1;
+
+const uint8_t ISO_IN_ENDPOINT_NUMBER = 2;
+const uint8_t ISO_IN_ENDPOINT_ADDRESS = ISO_IN_ENDPOINT_NUMBER | LIBUSB_ENDPOINT_IN;
+const uint8_t ISO_IN_INTERFACE = 2;
+const unsigned int ISO_IN_TIMEOUT = 1000;
+const int NUM_ISO_IN_PACKETS = 16;
 
 // It seems that having a lot of ISO packets in reserve helps avoid dropped bits.
 // I'm still not sure what cranking up the ISO packets gets you vs. an increased

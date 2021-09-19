@@ -249,31 +249,16 @@ class Device(Elaboratable):
 			# TODO: If the configuration descriptor is too long (64 bytes?), something in the descriptor
 			# request generator stuff is broken and screws up enumeration. bMaxPacketSize0?
 
-			# with c.InterfaceDescriptor() as i:
-			# 	i.bInterfaceNumber = 0
-
-			# 	with i.EndpointDescriptor() as e:
-			# 		e.bEndpointAddress = USBDirection.IN.to_endpoint_address(INTERRUPT_ENDPOINT_NUMBER)
-			# 		e.wMaxPacketSize   = MAX_INTERRUPT_PACKET_SIZE
-			# 		e.bmAttributes     = USBTransferType.INTERRUPT
-
-			# 		# Request that we be polled once ber microseconds (2 ^ 3 microframes).
-			# 		e.bInterval        = 4
-
 			with c.InterfaceDescriptor() as i:
 				i.bInterfaceNumber = 0
-				i.bAlternateSetting = 0
-
-			with c.InterfaceDescriptor() as i:
-				i.bInterfaceNumber = 0
-				i.bAlternateSetting = 1
 
 				with i.EndpointDescriptor() as e:
-					e.bEndpointAddress = USBDirection.IN.to_endpoint_address(ISO_IN_ENDPOINT_NUMBER)
-					e.wMaxPacketSize   = (MAX_ISO_IN_PACKETS_PER_INTERVAL << 11) | MAX_ISO_IN_PACKET_SIZE
-					e.bmAttributes     = (USBUsageType.DATA << 4) | (USBSynchronizationType.ASYNC << 2) | USBTransferType.ISOCHRONOUS
+					e.bEndpointAddress = USBDirection.IN.to_endpoint_address(INTERRUPT_ENDPOINT_NUMBER)
+					e.wMaxPacketSize   = MAX_INTERRUPT_PACKET_SIZE
+					e.bmAttributes     = USBTransferType.INTERRUPT
 
-					e.bInterval        = 1
+					# Request that we be polled once ber microseconds (2 ^ 3 microframes).
+					e.bInterval        = 4
 
 			with c.InterfaceDescriptor() as i:
 				i.bInterfaceNumber = 1
@@ -290,12 +275,27 @@ class Device(Elaboratable):
 
 					e.bInterval        = 1
 
+			with c.InterfaceDescriptor() as i:
+				i.bInterfaceNumber = 2
+				i.bAlternateSetting = 0
+
+			with c.InterfaceDescriptor() as i:
+				i.bInterfaceNumber = 2
+				i.bAlternateSetting = 1
+
+				with i.EndpointDescriptor() as e:
+					e.bEndpointAddress = USBDirection.IN.to_endpoint_address(ISO_IN_ENDPOINT_NUMBER)
+					e.wMaxPacketSize   = (MAX_ISO_IN_PACKETS_PER_INTERVAL << 11) | MAX_ISO_IN_PACKET_SIZE
+					e.bmAttributes     = (USBUsageType.DATA << 4) | (USBSynchronizationType.ASYNC << 2) | USBTransferType.ISOCHRONOUS
+
+					e.bInterval        = 1
+
 			# TODO: Force the number of interfaces to "2", as two of the interfaces have multiple
 			# alternate settings, and the USB protocol library doesn't seem to care about this.
 			from usb_protocol.types.descriptors import StandardDescriptorNumbers
-			assert(c._type_counts[StandardDescriptorNumbers.INTERFACE]) == 4
-			c._type_counts[StandardDescriptorNumbers.INTERFACE] = 2
-			assert(c._type_counts[StandardDescriptorNumbers.INTERFACE]) == 2
+			assert(c._type_counts[StandardDescriptorNumbers.INTERFACE]) == 5
+			c._type_counts[StandardDescriptorNumbers.INTERFACE] = 3
+			assert(c._type_counts[StandardDescriptorNumbers.INTERFACE]) == 3
 
 		# print(list(descriptors))
 
