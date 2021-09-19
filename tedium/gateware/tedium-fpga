@@ -237,14 +237,17 @@ class Device(Elaboratable):
 		with descriptors.DeviceDescriptor() as d:
 			d.idVendor  = VENDOR_ID
 			d.idProduct = PRODUCT_ID
+			d.bcdDevice = 1.01
 
 			d.iManufacturer = "ShareBrained"
 			d.iProduct      = "Tedium X8"
-			d.iSerialNumber = "deadbeef"
 
 			d.bNumConfigurations = 1
 
 		with descriptors.ConfigurationDescriptor() as c:
+
+			c.bmAttributes = 0xC0
+			c.bMaxPower = 50
 
 			# TODO: If the configuration descriptor is too long (64 bytes?), something in the descriptor
 			# request generator stuff is broken and screws up enumeration. bMaxPacketSize0?
