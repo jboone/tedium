@@ -1,0 +1,32 @@
+[package]
+name = "tedium-tool"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rusb = "0.9"
+clap = { version = "3.1", features = ["derive"] }
+console = "0.15"
+crossbeam = "0.8"
+
+thiserror = "1.0"
+libc = "0.2"
+
+num-complex = "0.4"
+
+bytemuck = "1.9"
+# pipewire = "0.5"
+# pipewire = { path = "../../../modem/pipewire-rs/pipewire" }
+
+# libspa-sys = "0.5"
+# libspa-sys = { path = "../../../modem/pipewire-rs/libspa-sys" }
+
+# jack = "0.10"
+
+# Sad that modular-bitfield doesn't support MSB-first packing.
+#modular-bitfield = "0.11"
+modular-bitfield-msb = "0.11"
+
+audio_thread_priority = "0.26"
