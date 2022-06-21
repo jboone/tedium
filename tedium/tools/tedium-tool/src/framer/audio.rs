@@ -958,6 +958,25 @@ struct RxUSBReport {
 unsafe impl Zeroable for RxUSBReport {}
 unsafe impl Pod for RxUSBReport {}
 
+#[derive(Copy, Clone, Debug)]
+#[repr(packed)]
+struct TxUSBReport {
+    frame_count: u32,
+}
+
+#[derive(Copy, Clone, Debug)]
+#[repr(packed)]
+struct TxFrameReport {
+    frame_count: u32,
+}
+
+#[derive(Copy, Clone, Debug)]
+#[repr(packed)]
+struct TxFrame {
+    report: TxFrameReport,
+    timeslot_data: [[u8; 8]; 24],
+}
+
 impl CallbackIn for LoopbackFrameHandler {
     fn callback_in(&mut self, transfer: *mut ffi::libusb_transfer) {
         let transfer_status = unsafe { (*transfer).status };
@@ -1011,9 +1030,20 @@ impl CallbackOut for LoopbackFrameHandler {
 
         let mut buffer = unsafe { slice::from_raw_parts_mut((*transfer).buffer, (*transfer).length.try_into().unwrap()) };
 
+        let first_packet_size_adjustment = 0;
         for i in 0..num_iso_packets {
+            let frame_count = if i == 0 {
+                match first_packet_size_adjustment {
+                    -1 => 0,
+                     1 => 2,
+                    _  => 1,
+                }
+            } else {
+                1
+            };
+
             let packet = unsafe { (*transfer).iso_packet_desc.get_unchecked_mut(i) };
-            packet.length = 211;
+            packet.length = (size_of::<TxUSBReport>() + frame_count * size_of::<TxFrame>()).try_into().unwrap();
             packet.actual_length = packet.length;
 
             for c in &mut buffer[..packet.length as usize] {
