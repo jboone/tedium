@@ -2,13 +2,19 @@
 
 TDM telephony experimentation
 
-# Installation
+## Dependencies
 
-This project uses [Poetry](https://python-poetry.org/) to manage Python dependencies.
+* `oss-cad-suite`: open-source digital design and verification tools, with [nightly binary builds](https://github.com/YosysHQ/oss-cad-suite-build).
+* [`poetry`](https://python-poetry.org/): Python dependencies and packaging management tool.
+
+## Installation
+
+Clone this repository, and generally follow these steps:
 
 ```bash
+$ cd tedium
 # Grant access through `udev` to the FTDI JTAG interface on the Tedium board.
-$ sudo ln -sf /home/jboone/src/tedium/99-tedium.rules /etc/udev/rules.d/
+$ sudo ln -sf ./99-tedium.rules /etc/udev/rules.d/
 $ sudo udevadm control --reload-rules && sudo udevadm trigger
 #
 $ pip3 install poetry --user
@@ -21,13 +27,12 @@ $ poetry shell
 # Include OSS CAD Suite tools in PATH
 $ export PATH="/home/jboone/src/fpga/oss-cad-suite/bin:$PATH"
 # Build and download FPGA bitstream
-#$ poetry run tedium/gateware/tedium-fpga
 # LUNA_AVOID_BLOCKRAM required for reliable USB enumeration as of 2022/May/02.
-$ LUNA_PLATFORM="tedium.gateware.xplatform:TediumX8Platform" LUNA_AVOID_BLOCKRAM=1 tedium/gateware/tedium-fpga
+$ LUNA_AVOID_BLOCKRAM=1 applets/tedium-fpga
+# After the bitstream is generated, you can inspect the results in the `build` directory.
 # Initialize the framer/LIU
-#$ poetry run tedium/tedium-tool reset
-#$ tedium/tedium-tool reset
 $ cargo run --release --bin tedium-tool -- init
+# Run the host-side audio and event engine
 $ cargo run --release --bin tedium-tool -- monitor
 ```
 
@@ -35,20 +40,16 @@ NOTE: My Tedium .venv got weird when I had the "OSS CAD Suite" environment alrea
 Poetry would download dependencies on `poetry install` or `poetry update`, but would then
 delete them when running `poetry run` or `poetry shell`.
 
-# PipeWire
+## Testing
 
-Running a stand-alone PipeWire instance:
+Unit tests may be run like this:
 
 ```bash
-# Absolute path is assential, or it'll load relative to some `share` directory.
-$ PIPEWIRE_DEBUG="D" pipewire -c /home/jboone/src/tedium/pipewire.conf
-$ PIPEWIRE_REMOTE="pipewire-tedium" pw-top
-$ PIPEWIRE_REMOTE="pipewire-tedium" pw-cli
-$ PIPEWIRE_REMOTE="pipewire-tedium" pw-dot -a -d && dot -Tsvg pw.dot -o pw.svg && open pw.svg
-# Note that qpwgraph doesn't seem to have a way to specify the non-default PipeWire instance (remote).
+$ python3 -m unittest tests.hdl.tx_usb_to_fifo
+# Or the name of any other HDL test module you want to run/simulate.
 ```
 
-# USB Debugging
+## USB Debugging
 
 ```bash
 $ sudo cat /sys/kernel/debug/usb/devices
@@ -58,53 +59,7 @@ $ sudo sysctl -w kernel.printk=7 # debug-level messages
 $ sudo sysctl kernel.printk
 ```
 
-## Monitoring ALSA Device State
-
-```bash
-$ watch -n 1 cat /proc/asound/cardX/stream0
-...
-ShareBrained Tedium X8 at usb-0000:00:14.0-2, high speed : USB Audio
-
-Playback:
-  Status: Running
-    Interface = 1
-    Altset = 1
-    Packet Size = 384
-    Momentary freq = 8000 Hz (0x1.0000)
-  Interface 1
-    Altset 1
-    Format: MU_LAW
-    Channels: 192
-    Endpoint: 0x01 (1 OUT) (ASYNC)
-    Rates: 8000
-    Data packet interval: 125 us
-    Bits: 8
-    Sync Endpoint: 0x81 (1 IN)
-    Sync EP Interface: 2
-    Sync EP Altset: 1
-    Implicit Feedback Mode: Yes
-
-Capture:
-  Status: Running
-    Interface = 2
-    Altset = 1
-    Packet Size = 384
-    Momentary freq = 8000 Hz (0x1.0000)
-  Interface 2
-    Altset 1
-    Format: MU_LAW
-    Channels: 192
-    Endpoint: 0x81 (1 IN) (ASYNC)
-    Rates: 8000
-    Data packet interval: 125 us
-    Bits: 8
-```
-
-Critical implicit feedback details being the `Sync EP` values, which look correct in the example above.
-
-What's odd though is the `Packet Size` numbers, which I guess are the 1 + additional packets per frame * the max packet size? In which case they make sense. But that's not what the descriptor says.
-
-## Using Wireshark
+### Using Wireshark
 
 ```bash
 $ sudo modprobe usbmon
@@ -126,7 +81,7 @@ usb.endpoint_address.number==1 && usb.endpoint_address.direction==OUT && usb.urb
 
 However, it seems like Wireshark isn't showing complete URB buffer contents?
 
-# Trouble With Real-Time Kit
+## Trouble With Real-Time Kit
 
 ```bash
 # Is there an `rtkit` user?
@@ -139,11 +94,11 @@ $ journalctl -e -t rtkit-daemon
 $ ulimit -a
 ```
 
-# Use
+## Use
 
 See [the software README](tedium/README.md) for information on how to use `tedium-tool` to interact with the hardware over USB.
 
-### License
+## License
 
 This software and gateware in this project is licensed under the [BSD 3-Clause License](LICENSE-BSD-3-Clause).
 
