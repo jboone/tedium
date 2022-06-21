@@ -466,35 +466,35 @@ class Device(Elaboratable):
             rx_fifo_usb    = m.submodules.rx_fifo_usb    = RxFIFOToUSBInAdapter(rx_fifo.reader, ep_in, rx_usb_report)
             m.d.comb += rx_fifo_usb.start_of_frame.eq(usb.sof_detected)
 
-            # tx_phys = [platform.request("tx", n) for n in range(CHANNELS)]
-            # tx_blocks: List[TxBlock] = []
-            # for i, phy in enumerate(tx_phys):
-            #     tx_block = TxBlock(phy, system_timing.iface)
-            #     tx_blocks.append(tx_block)
-            #     m.submodules[f"tx_block{i}"] = tx_block
+            tx_phys = [platform.request("tx", n) for n in range(CHANNELS)]
+            tx_blocks: List[TxBlock] = []
+            for i, phy in enumerate(tx_phys):
+                tx_block = TxBlock(phy, system_timing.iface)
+                tx_blocks.append(tx_block)
+                m.submodules[f"tx_block{i}"] = tx_block
 
-            #     m.d.comb += [
-            #         tx_block.serclk.eq(serclk),
-            #         tx_block.output_enable.eq(output_enable),
-            #     ]
-            # tx_timeslots = [tx_block.timeslot for tx_block in tx_blocks]
+                m.d.comb += [
+                    tx_block.serclk.eq(serclk),
+                    tx_block.output_enable.eq(output_enable),
+                ]
+            tx_timeslots = [tx_block.timeslot for tx_block in tx_blocks]
 
-            # tx_fifo        = m.submodules.tx_fifo        = PagedAsyncFIFO(tx_frame_record_size, tx_fifo_depth, w_domain="usb", r_domain="sync")
-            # tx_fifo_framer = m.submodules.tx_fifo_framer = TxFIFOToFramerAdapter(tx_fifo.reader, tx_timeslots, system_timing.iface, tx_frame_report)
-            # tx_usb_fifo    = m.submodules.tx_usb_fifo    = TxUSBOutToFIFOAdapter(ep_out, tx_fifo.writer, tx_usb_report)
-            # m.d.comb += tx_usb_fifo.start_of_frame.eq(usb.sof_detected)
+            tx_fifo        = m.submodules.tx_fifo        = PagedAsyncFIFO(tx_frame_record_size, tx_fifo_depth, w_domain="usb", r_domain="sync")
+            tx_fifo_framer = m.submodules.tx_fifo_framer = TxFIFOToFramerAdapter(tx_fifo.reader, tx_timeslots, system_timing.iface, tx_frame_report)
+            tx_usb_fifo    = m.submodules.tx_usb_fifo    = TxUSBOutToFIFOAdapter(ep_out, tx_fifo.writer, tx_usb_report)
+            m.d.comb += tx_usb_fifo.start_of_frame.eq(usb.sof_detected)
 
             with m.If(usb.sof_detected):
                 m.d.usb += [
                     rx_usb_report.sof_count.eq(rx_usb_report.sof_count + 1),
                     rx_usb_report.fifo_rx_level.eq(rx_fifo.reader.r_level2),
-                    # rx_usb_report.fifo_tx_level.eq(tx_fifo.writer.w_level2),
+                    rx_usb_report.fifo_tx_level.eq(tx_fifo.writer.w_level2),
                     rx_usb_report.sequence_count.eq(rx_usb_report.sequence_count + 1),
                 ]
             with m.If(rx_fifo.reader.r_underflow):
                 m.d.usb += rx_usb_report.fifo_rx_underflow_count.eq(rx_usb_report.fifo_rx_underflow_count + 1),
-            # with m.If(tx_fifo.writer.w_overflow):
-            #     m.d.usb += rx_usb_report.fifo_tx_overflow_count.eq(rx_usb_report.fifo_tx_overflow_count + 1),
+            with m.If(tx_fifo.writer.w_overflow):
+                m.d.usb += rx_usb_report.fifo_tx_overflow_count.eq(rx_usb_report.fifo_tx_overflow_count + 1),
 
             with m.If(system_timing.iface.frame_strobe):
                 m.d.sync += [
