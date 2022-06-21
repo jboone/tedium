@@ -603,12 +603,12 @@ enum InterfaceNumber {
     Interrupt = 1,
 }
 
+// TODO: Keep synchronized with `gateware/descriptors_vendor.py`.
 #[derive(Copy, Clone, Debug)]
 #[repr(u8)]
 enum EndpointNumber {
-    FrameStreamIn = 1,
-    FrameStreamOut = 2,
-    Interrupt = 3,
+    FrameStream = 1,
+    Interrupt = 2,
 }
 
 pub fn pump3() -> Result<(), PumpError> {
@@ -647,7 +647,7 @@ pub fn pump3() -> Result<(), PumpError> {
     for _ in 0..8 {
         let transfer_in = IsochronousTransfer::new(
             device_handle.clone(),
-            LIBUSB_ENDPOINT_IN | EndpointNumber::FrameStreamIn as u8,
+            LIBUSB_ENDPOINT_IN | EndpointNumber::FrameStream as u8,
             NUM_ISO_PACKETS,
             FRAME_IN_LENGTH * 2,    // Two transfers (audio frames) per USB microframe.
             0,
@@ -659,7 +659,7 @@ pub fn pump3() -> Result<(), PumpError> {
 
         let transfer_out = IsochronousTransfer::new(
             device_handle.clone(),
-            LIBUSB_ENDPOINT_OUT | EndpointNumber::FrameStreamOut as u8,
+            LIBUSB_ENDPOINT_OUT | EndpointNumber::FrameStream as u8,
             NUM_ISO_PACKETS,
             FRAME_OUT_LENGTH * 2,
             0,
@@ -779,7 +779,7 @@ pub fn pump_loopback() -> Result<(), PumpError> {
     for _ in 0..8 {
         let transfer_in = IsochronousTransfer::new(
             device_handle.clone(),
-            LIBUSB_ENDPOINT_IN | EndpointNumber::FrameStreamIn as u8,
+            LIBUSB_ENDPOINT_IN | EndpointNumber::FrameStream as u8,
             NUM_ISO_PACKETS,
             512,    // Two transfers (audio frames) per USB microframe.
             0,
@@ -791,7 +791,7 @@ pub fn pump_loopback() -> Result<(), PumpError> {
 
         let transfer_out = IsochronousTransfer::new(
             device_handle.clone(),
-            LIBUSB_ENDPOINT_OUT | EndpointNumber::FrameStreamOut as u8,
+            LIBUSB_ENDPOINT_OUT | EndpointNumber::FrameStream as u8,
             NUM_ISO_PACKETS,
             512,
             0,
