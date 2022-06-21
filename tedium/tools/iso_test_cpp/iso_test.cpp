@@ -15,17 +15,17 @@
 const uint16_t VENDOR_ID  = 0x16d0;
 const uint16_t PRODUCT_ID = 0x0f3b;
 
-const uint8_t INTERRUPT_ENDPOINT_NUMBER = 9;
+const uint8_t INTERRUPT_ENDPOINT_NUMBER = 3;
 
-const uint8_t ISO_OUT_ENDPOINT_NUMBER = 1;
+const uint8_t ISO_OUT_ENDPOINT_NUMBER = 2;
 const uint8_t ISO_OUT_ENDPOINT_ADDRESS = ISO_OUT_ENDPOINT_NUMBER | LIBUSB_ENDPOINT_OUT;
 const uint8_t ISO_OUT_INTERFACE = 1;
 const unsigned int ISO_OUT_TIMEOUT = 1000;
 const int NUM_ISO_OUT_PACKETS = 1;
 
-const uint8_t ISO_IN_ENDPOINT_NUMBER = 2;
+const uint8_t ISO_IN_ENDPOINT_NUMBER = 1;
 const uint8_t ISO_IN_ENDPOINT_ADDRESS = ISO_IN_ENDPOINT_NUMBER | LIBUSB_ENDPOINT_IN;
-const uint8_t ISO_IN_INTERFACE = 2;
+const uint8_t ISO_IN_INTERFACE = 1;
 const unsigned int ISO_IN_TIMEOUT = 1000;
 const int NUM_ISO_IN_PACKETS = 16;
 
@@ -34,8 +34,17 @@ const int NUM_ISO_IN_PACKETS = 16;
 // number of transfers.
 const size_t NUM_TRANSFERS = 8 * 10;
 
-const size_t FRAME_LENGTH = 24;
-const size_t TRANSFER_LENGTH = FRAME_LENGTH * 2;
+const size_t FRAMES_PER_TRANSFER = 2;
+
+const size_t CHANNELS = 8;
+const size_t TIMESLOTS_PER_CHANNEL = 24;
+const size_t TIMESLOTS_PER_FRAME = TIMESLOTS_PER_CHANNEL * CHANNELS;
+
+const size_t FRAME_LENGTH_IN = 1 + TIMESLOTS_PER_FRAME + 2 + 2 + 2 + 1;
+const size_t TRANSFER_LENGTH_IN = FRAME_LENGTH_IN * FRAMES_PER_TRANSFER;
+
+const size_t FRAME_LENGTH_OUT = 1 + TIMESLOTS_PER_FRAME;
+const size_t TRANSFER_LENGTH_OUT = FRAME_LENGTH_OUT * FRAMES_PER_TRANSFER;
 
 static FILE* f_out = NULL;
 static uint8_t last = 0;
@@ -57,6 +66,8 @@ static FILE* f_ulaw_in = NULL;
 // 	return f_ulaw_in != NULL;
 // }
 
+static size_t iso_in_buffer_count = 0;
+
 void callback_iso_in(libusb_transfer* transfer) {
 	// printf("IN: callback: %d: %d\n", transfer->status, transfer->iso_packet_desc[0].actual_length);
 
@@ -68,47 +79,56 @@ void callback_iso_in(libusb_transfer* transfer) {
 
 			if( packet->status == LIBUSB_TRANSFER_COMPLETED) {
 				if( packet->actual_length > 0 ) {
-					if( (packet->actual_length % FRAME_LENGTH) == 0 ) {
+					if( (packet->actual_length % FRAME_LENGTH_IN) == 0 ) {
 						auto b = libusb_get_iso_packet_buffer_simple(transfer, i);
+						if (b != NULL) {
+							iso_in_buffer_count += 1;
 
-						const bool usb_iso_rx_debug = false;
+							const bool usb_iso_rx_debug = false;
 
-						if( usb_iso_rx_debug ) {
-							for(auto j=0; j<packet->actual_length; j+=FRAME_LENGTH) {
-								auto c = &b[j];
-								const uint32_t framer_data      = *((uint32_t *)&c[ 0]);
-								const uint32_t usb_clock_count  = bswap_32(*((uint32_t *)&c[ 4]));
-								const uint32_t usb_frame_count  = bswap_32(*((uint32_t *)&c[ 8]));
-								const uint32_t data_frame_count = bswap_32(*((uint32_t *)&c[12]));
-								const uint32_t fifo_r_level     = bswap_32(*((uint32_t *)&c[16]));
+							if( usb_iso_rx_debug ) {
+								for(auto j=0; j<packet->actual_length; j+=FRAME_LENGTH_IN) {
+									auto c = &b[j];
+									const uint32_t framer_data      = *((uint32_t *)&c[ 0]);
+									const uint32_t usb_clock_count  = bswap_32(*((uint32_t *)&c[ 4]));
+									const uint32_t usb_frame_count  = bswap_32(*((uint32_t *)&c[ 8]));
+									const uint32_t data_frame_count = bswap_32(*((uint32_t *)&c[12]));
+									const uint32_t fifo_r_level     = bswap_32(*((uint32_t *)&c[16]));
 
-								// printf("IN: %08x\n", data_frame_count);
+									// printf("IN: %08x\n", data_frame_count);
 
-								if( expected_data_frame_count != data_frame_count ) {
-									printf("IN: data frame: expected %08x, got %08x\n", expected_data_frame_count, data_frame_count);
+									if( expected_data_frame_count != data_frame_count ) {
+										printf("IN: data frame: expected %08x, got %08x\n", expected_data_frame_count, data_frame_count);
+									}
+									expected_data_frame_count = data_frame_count + 1;
+
+									// if( expected_framer_data != framer_data ) {
+									// 	printf("IN: framer data: expected %08x, got %08x\n", expected_framer_data, framer_data);
+									// }
+									// expected_framer_data = framer_data + 1;
 								}
-								expected_data_frame_count = data_frame_count + 1;
+							}
 
-								// if( expected_framer_data != framer_data ) {
-								// 	printf("IN: framer data: expected %08x, got %08x\n", expected_framer_data, framer_data);
-								// }
-								// expected_framer_data = framer_data + 1;
+							fwrite(b, packet->actual_length, 1, f_out);
+
+							if (iso_in_buffer_count & 0xfff == 0) {
+								printf("I");
 							}
 						} else {
-
+							printf("IN: libusb_get_iso_packet_buffer_simple(transfer, %2d) returned NULL\n", i);
 						}
-
-						fwrite(b, packet->actual_length, 1, f_out);
-
-						// printf(".");
 					} else {
-						printf("IN: packet %d incomplete, length %d\n", i, packet->actual_length);
+						printf("IN: packet %2d incomplete, length %3d\n", i, packet->actual_length);
 					}
-				// } else {
-				// 	printf("IN: packet %d length = %d\n", i, packet->actual_length);
+				} else {
+					// NOTE: Occasional actual_length=0 packets appear to indicate a "slip" between the host and device.
+					// It's not important, since the host is not the timing source. So it takes however many frames the
+					// device offers, and as long as it doesn't miss or duplicate frames in the process, the host will
+					// operate in lock-step with the device.
+					printf("IN: packet %2d actual_length = %3d\n", i, packet->actual_length);
 				}
 			} else {
-				printf("IN: packet %d status = %d\n", i, packet->status);
+				printf("IN: packet %2d status = %d\n", i, packet->status);
 			}
 		}
 	} else {
@@ -124,7 +144,7 @@ void callback_iso_in(libusb_transfer* transfer) {
 void callback_iso_out(libusb_transfer* transfer) {
 	// printf("OUT: callback: %d: %d\n", transfer->status, transfer->iso_packet_desc[0].actual_length);
 
-	libusb_set_iso_packet_lengths(transfer, 24);
+	libusb_set_iso_packet_lengths(transfer, FRAME_LENGTH_OUT);
 
 	for(auto i=0; i<NUM_ISO_OUT_PACKETS; i++) {
 		auto packet = &transfer->iso_packet_desc[i];
@@ -148,7 +168,14 @@ void callback_iso_out(libusb_transfer* transfer) {
 
 		memset(b, v, packet->length);
 
-		// printf("OUT: packet[%d] length=%d actual_length=%d\n", i, packet->length, packet->actual_length);
+		// F bits.
+		b[0] = 0xff;
+
+		if (packet->length != packet->actual_length) {
+			// TODO: If `actual_length` is zero, does that mean I should resubmit this packet for transmission?
+			// Will things get out of order?
+			printf("OUT: packet[%d] length=%d actual_length=%d\n", i, packet->length, packet->actual_length);
+		}
 	}
 
 	auto result = libusb_submit_transfer(transfer);
@@ -207,7 +234,7 @@ int main(int argc, char ** argv) {
 			return -6;
 		}
 
-		const size_t BLOCK_LENGTH = TRANSFER_LENGTH;
+		const size_t BLOCK_LENGTH = TRANSFER_LENGTH_IN;
 		const size_t BUFFER_LENGTH = BLOCK_LENGTH * NUM_ISO_IN_PACKETS;
 		auto buffer = new uint8_t[BUFFER_LENGTH];
 		libusb_fill_iso_transfer(transfer, device_handle, ISO_IN_ENDPOINT_ADDRESS, buffer, BUFFER_LENGTH, NUM_ISO_IN_PACKETS, callback_iso_in, NULL, ISO_IN_TIMEOUT);
@@ -241,12 +268,12 @@ int main(int argc, char ** argv) {
 			return -10;
 		}
 
-		const size_t BLOCK_LENGTH = TRANSFER_LENGTH;
+		const size_t BLOCK_LENGTH = TRANSFER_LENGTH_OUT;
 		const size_t BUFFER_LENGTH = BLOCK_LENGTH * NUM_ISO_OUT_PACKETS;
 		auto buffer = new uint8_t[BUFFER_LENGTH];
 		libusb_fill_iso_transfer(transfer, device_handle, ISO_OUT_ENDPOINT_ADDRESS, buffer, BUFFER_LENGTH, NUM_ISO_OUT_PACKETS, callback_iso_out, NULL, ISO_OUT_TIMEOUT);
 
-		libusb_set_iso_packet_lengths(transfer, 24);
+		libusb_set_iso_packet_lengths(transfer, FRAME_LENGTH_OUT);
 
 		for(auto i=0; i<NUM_ISO_OUT_PACKETS; i++) {
 			auto packet = &transfer->iso_packet_desc[i];
@@ -254,7 +281,7 @@ int main(int argc, char ** argv) {
 			printf("OUT: packet[%d] length=%d actual_length=%d\n", i, packet->length, packet->actual_length);
 		}
 
-		// transfer->iso_packet_desc[0].length = 24;
+		// transfer->iso_packet_desc[0].length = FRAME_LENGTH;
 
 		result = libusb_submit_transfer(transfer);
 		if( result != 0 ) {
