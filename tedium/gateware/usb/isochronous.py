@@ -9,15 +9,12 @@ These interfaces provide interfaces for connecting memories or memory-like
 interfaces to hosts via isochronous pipes.
 """
 
-from amaranth         import Elaboratable, Module, Signal
+from amaranth import *
+
 from luna.gateware.memory import TransactionalizedFIFO
 from luna.gateware.stream import StreamInterface
-
+from luna.gateware.usb.stream import USBOutStreamBoundaryDetector
 from luna.usb2 import EndpointInterface
-
-from luna.gateware.usb.stream       import USBInStreamInterface, USBOutStreamBoundaryDetector
-
-from usb_protocol.types import USBStandardRequests, USBPacketID
 
 class USBIsochronousInEndpointTedium(Elaboratable):
     """ Isochronous endpoint that presents a memory-like interface.

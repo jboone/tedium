@@ -14,11 +14,11 @@ import struct
 import usb.core
 import usb.util
 
-from framer_common import *
+from tedium.gateware.usb.descriptors_vendor import *
 
 f = open('/tmp/bob.u8', 'wb')
 
-dev = usb.core.find(idVendor=VENDOR_ID, idProduct=PRODUCT_ID)
+dev = usb.core.find(idVendor=Descriptors.VENDOR_ID, idProduct=Descriptors.PRODUCT_ID)
 # dev.set_configuration()
 
 cfg = dev.get_active_configuration()

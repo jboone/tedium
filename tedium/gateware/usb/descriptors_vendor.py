@@ -1,4 +1,3 @@
-
 from enum import IntEnum
 
 from usb_protocol.types import USBTransferType, USBSynchronizationType, USBUsageType, USBDirection

@@ -7,25 +7,22 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from typing import List
+
 from amaranth                       import *
 from amaranth.hdl.ast               import Rose
 from amaranth.lib.fifo import SyncFIFOBuffered
 
-from usb_protocol.types             import USBRequestType, USBStandardRequests
-
-from luna.usb2                      import USBDevice
-
 from luna.gateware.stream.generator import StreamSerializer
 from luna.gateware.usb.stream       import USBInStreamInterface
 from luna.gateware.usb.usb2.request import USBRequestHandler
+from luna.usb2                      import USBDevice
 
-from descriptors_vendor import Descriptors
-from handler_set_interface import SetInterfaceRequestHandler
-from status import USBSignalInEndpointTedium
+from usb_protocol.types             import USBRequestType, USBStandardRequests
 
-from common import *
-
-from isochronous import USBIsochronousInEndpointTedium, USBIsochronousOutEndpointTedium
+from tedium.gateware.usb.isochronous import USBIsochronousInEndpointTedium, USBIsochronousOutEndpointTedium
+from tedium.gateware.usb.descriptors_vendor import Descriptors
+from tedium.gateware.usb.handler_set_interface import SetInterfaceRequestHandler
+from tedium.gateware.usb.status import USBSignalInEndpointTedium
 
 from tedium.gateware.framer.bit_timing import BitTiming
 from tedium.gateware.framer.microprocessor import MicroprocessorInterface
@@ -38,6 +35,14 @@ from tedium.gateware.framer.system_timing import SystemTiming
 from tedium.gateware.framer.tx_block import TxBlock
 from tedium.gateware.framer.tx_fifo_to_framer import TxFIFOToFramerAdapter
 from tedium.gateware.framer.tx_usb_to_fifo import TxUSBOutToFIFOAdapter
+
+CHANNELS = 8
+TIMESLOTS_PER_CHANNEL = 24
+TIMESLOTS_PER_FRAME = TIMESLOTS_PER_CHANNEL * CHANNELS
+
+REQUEST_REGISTER_READ     = 0
+REQUEST_REGISTER_WRITE    = 1
+REQUEST_FRAMER_IF_CONTROL = 2
 
 class RxFrameReport(Report):
     """

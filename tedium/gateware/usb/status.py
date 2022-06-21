@@ -10,11 +10,10 @@ These are mainly meant for use with interrupt endpoints; and allow a host to e.g
 repeatedly poll a device for status.
 """
 
-from amaranth       import Elaboratable, Module, Signal, Array
+from amaranth import *
 
 from luna.gateware.usb.usb2.endpoint import EndpointInterface
 from luna.gateware.utils.cdc         import synchronize
-
 
 class USBSignalInEndpointTedium(Elaboratable):
     """ Endpoint that transmits the value of a signal to a host whenever polled.

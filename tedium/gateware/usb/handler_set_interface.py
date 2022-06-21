@@ -1,9 +1,10 @@
 from amaranth import *
-from luna.gateware.usb.usb2.request   import USBRequestHandler
 
-from usb_protocol.types                       import USBRequestType, USBRequestRecipient, USBStandardRequests
+from luna.gateware.usb.usb2.request import USBRequestHandler
 
-from descriptors_vendor import Descriptors
+from usb_protocol.types import USBRequestType, USBRequestRecipient, USBStandardRequests
+
+from .descriptors_vendor import Descriptors
 
 class SetInterfaceRequestHandler(USBRequestHandler):
     """ Support SET_INTERFACE requests """

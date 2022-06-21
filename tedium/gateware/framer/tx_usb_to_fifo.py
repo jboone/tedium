@@ -1,6 +1,6 @@
 from amaranth import *
 
-from tedium.gateware.isochronous import USBIsochronousOutEndpointTedium
+from ..usb.isochronous import USBIsochronousOutEndpointTedium
 
 from .paged_fifo import PagedFIFOWriteInterface
 
