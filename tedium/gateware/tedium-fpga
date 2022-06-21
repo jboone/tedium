@@ -6,508 +6,623 @@
 # Copyright (C) 2020 Jared Boone <jared@sharebrained.com>
 # SPDX-License-Identifier: BSD-3-Clause
 
-import os
+from typing import List
+from amaranth                       import *
+from amaranth.hdl.ast               import Rose
+from amaranth.lib.fifo import SyncFIFOBuffered
 
-from nmigen                         import Elaboratable, Module, Signal, ClockSignal, DomainRenamer, Cat, Const, Memory
-from nmigen.hdl.ast                 import Rose, Fell, Array
-from nmigen.lib.cdc                 import PulseSynchronizer
-from nmigen.lib.fifo                import AsyncFIFO, AsyncFIFOBuffered
+from usb_protocol.types             import USBRequestType, USBStandardRequests
 
-from usb_protocol.types             import USBStandardRequests, USBRequestType, USBTransferType, USBSynchronizationType, USBUsageType, USBDirection, USBPacketID
-from usb_protocol.emitters          import DeviceDescriptorCollection
-
-from luna.usb2                      import USBDevice, USBSignalInEndpoint
+from luna.usb2                      import USBDevice
 
 from luna.gateware.stream.generator import StreamSerializer
 from luna.gateware.usb.stream       import USBInStreamInterface
 from luna.gateware.usb.usb2.request import USBRequestHandler
 
-from xplatform import TediumX8Platform
+from descriptors_vendor import Descriptors
+from handler_set_interface import SetInterfaceRequestHandler
+from status import USBSignalInEndpointTedium
 
 from common import *
 
-from framer.bus import *
-from framer.interface import *
+from isochronous import USBIsochronousInEndpointTedium, USBIsochronousOutEndpointTedium
 
-from usb.isochronous import USBIsochronousInEndpointTedium, USBIsochronousOutEndpointTedium
+from tedium.gateware.framer.bit_timing import BitTiming
+from tedium.gateware.framer.microprocessor import MicroprocessorInterface
+from tedium.gateware.framer.paged_fifo import PagedAsyncFIFO, PagedFIFOWriteInterface
+from tedium.gateware.framer.report import Report
+from tedium.gateware.framer.rx_block import RxBlock
+from tedium.gateware.framer.rx_fifo_to_usb import RxFIFOToUSBInAdapter
+from tedium.gateware.framer.rx_framer_to_fifo import RxFramerToFIFOAdapter
+from tedium.gateware.framer.system_timing import SystemTiming
+from tedium.gateware.framer.tx_block import TxBlock
+from tedium.gateware.framer.tx_fifo_to_framer import TxFIFOToFramerAdapter
+from tedium.gateware.framer.tx_usb_to_fifo import TxUSBOutToFIFOAdapter
 
-class FramerBusVendorRequest(USBRequestHandler):
+class RxFrameReport(Report):
+    """
+    Report from the framer side of the system.
+    """
+    LAYOUT = [
+        ('frame_count', 32),
+    ]
 
-	def __init__(self):
-		super(FramerBusVendorRequest, self).__init__()
+    def __init__(self):
+        super().__init__(self.LAYOUT, name=self.__class__.__name__)
 
-		self.address = Signal(15)
-		self.data_wr = Signal(8)
-		self.data_rd = Signal(8)
-		self.write   = Signal()
-		self.start   = Signal()
-		self.busy    = Signal()
+class RxUSBReport(Report):
+    """
+    Report from the USB side of the system.
+    FIFO levels should be more up-to-date here, as they're
+    captured just before transmission.
+    """
+    LAYOUT = [
+        ('sof_count',               32),
+        ('fifo_rx_level',            8),
+        ('fifo_tx_level',            8),
+        ('fifo_rx_underflow_count', 16),
+        ('fifo_tx_overflow_count',  16),
+        ('sequence_count',           8),
+    ]
 
-		self.framer_if_enable = Signal()
+    def __init__(self):
+        super().__init__(self.LAYOUT, name=self.__class__.__name__)
 
-	# def handle_register_write_request(self, m, new_value_signal, write_strobe, stall_condition=0):
-	def handle_register_write_request(self, m, stall_condition=0):
-		""" Fills in the current state with a request handler meant to set a register.
-		Parameters:
-			new_value_signal -- The signal to receive the new value to be applied to the relevant register.
-			write_strobe     -- The signal which will be pulsed when new_value_signal contains a update.
-			stall_condition  -- If provided, if this condition is true, the request will be STALL'd instead
-								of acknowledged.
-			"""
+class TxUSBReport(Report):
+    """
+    """
+    LAYOUT = [
+        ('frame_count', 32),
+    ]
 
-		# Provide an response to the STATUS stage.
-		with m.If(self.interface.status_requested):
+    def __init__(self):
+        super().__init__(self.LAYOUT, name=self.__class__.__name__)
 
-			# If our stall condition is met, stall; otherwise, send a ZLP [USB 8.5.3].
-			with m.If(stall_condition):
-				m.d.comb += self.interface.handshakes_out.stall.eq(1)
-			with m.Else():
-				m.d.comb += self.send_zlp()
+class TxFrameReport(Report):
+    """
+    """
+    LAYOUT = [
+        ('frame_count', 32),
+    ]
 
-		# Accept the relevant value after the packet is ACK'd...
-		with m.If(self.interface.handshakes_in.ack):
-			# m.d.comb += [
-			# 	write_strobe      .eq(1),
-			# 	new_value_signal  .eq(self.interface.setup.value[0:7])
-			# ]
+    def __init__(self):
+        super().__init__(self.LAYOUT, name=self.__class__.__name__)
 
-			# ... and then return to idle.
-			m.next = 'IDLE'
+class FramerMicroprocessorBusVendorRequest(USBRequestHandler):
+    """
+    NOTE: Be sure to DomainRename "sync" to "usb"!
+    """
+    def __init__(self):
+        super(FramerMicroprocessorBusVendorRequest, self).__init__()
 
-	# def handle_simple_data_request(self, m, transmitter, data, length=1):
-	# 	""" Fills in a given current state with a request that returns a given piece of data.
-	# 	For e.g. GET_CONFIGURATION and GET_STATUS requests.
-	# 	Parameters:
-	# 		transmitter -- The transmitter module we're working with.
-	# 		data        -- The data to be returned.
-	# 	"""
+        self.address = Signal(15)
+        self.data_wr = Signal(8)
+        self.data_rd = Signal(8)
+        self.write   = Signal()
+        self.start   = Signal()
+        self.busy    = Signal()
 
-	# 	# Connect our transmitter up to the output stream...
-	# 	m.d.comb += [
-	# 		transmitter.stream          .attach(self.interface.tx),
-	# 		Cat(transmitter.data[0:1])  .eq(data),
-	# 		transmitter.max_length      .eq(length)
-	# 	]
+        self.framer_if_enable = Signal()
 
-	# 	# ... trigger it to respond when data's requested...
-	# 	with m.If(self.interface.data_requested):
-	# 		m.d.comb += transmitter.start.eq(1)
+    def elaborate(self, platform):
+        m = Module()
+        interface = self.interface
 
-	# 	# ... and ACK our status stage.
-	# 	with m.If(self.interface.status_requested):
-	# 		m.d.comb += self.interface.handshakes_out.ack.eq(1)
-	# 		m.next = 'IDLE'
+        # Create convenience aliases for our interface components.
+        setup               = interface.setup
+        handshake_generator = interface.handshakes_out
+        tx                  = interface.tx
 
-	def elaborate(self, platform):
-		m = Module()
-		interface = self.interface
+        m.d.sync += [
+            self.start.eq(0),
+        ]
 
-		# Create convenience aliases for our interface components.
-		setup               = interface.setup
-		handshake_generator = interface.handshakes_out
-		tx                  = interface.tx
+        m.submodules.transmitter = transmitter = \
+            StreamSerializer(data_length=1, domain="usb", stream_type=USBInStreamInterface, max_length_width=1)
 
-		m.d.sync += [
-			self.start.eq(0),
-		]
+        with m.If(setup.type == USBRequestType.VENDOR):
+            with m.FSM(domain="usb", reset="IDLE"):
 
-		m.submodules.transmitter = transmitter = \
-			StreamSerializer(data_length=1, domain="usb", stream_type=USBInStreamInterface, max_length_width=1)
+                # IDLE -- not handling any active request
+                with m.State('IDLE'):
 
-		with m.If(setup.type == USBRequestType.VENDOR):
-			with m.FSM(domain="usb"):
+                    # If we've received a new setup packet, handle it.
+                    with m.If(setup.received):
 
-				# IDLE -- not handling any active request
-				with m.State('IDLE'):
+                        # Select which standard packet we're going to handler.
+                        with m.Switch(setup.request):
 
-					# If we've received a new setup packet, handle it.
-					with m.If(setup.received):
+                            with m.Case(REQUEST_REGISTER_READ):
+                                m.d.sync += [
+                                    self.address.eq(setup.index[:15]),
+                                    self.write.eq(0),
+                                    self.start.eq(1),
+                                ]
+                                m.next = 'REG_READ'
 
-						# Select which standard packet we're going to handler.
-						with m.Switch(setup.request):
+                            with m.Case(REQUEST_REGISTER_WRITE):
+                                m.d.sync += [
+                                    self.address.eq(setup.index[:15]),
+                                    self.data_wr.eq(setup.value[:8]),
+                                    self.write.eq(1),
+                                    self.start.eq(1),
+                                ]
+                                m.next = 'REG_WRITE'
 
-							with m.Case(REQUEST_REGISTER_READ):
-								m.d.sync += [
-									self.address.eq(setup.index[:15]),
-									self.write.eq(0),
-									self.start.eq(1),
-								]
-								m.next = 'REG_READ'
+                            with m.Case(REQUEST_FRAMER_IF_CONTROL):
+                                m.d.sync += [
+                                    self.framer_if_enable.eq(setup.value[0]),
+                                ]
 
-							with m.Case(REQUEST_REGISTER_WRITE):
-								m.d.sync += [
-									self.address.eq(setup.index[:15]),
-									self.data_wr.eq(setup.value[:8]),
-									self.write.eq(1),
-									self.start.eq(1),
-								]
-								m.next = 'REG_WRITE'
+                                m.next = 'FRAMER_IF_CONTROL'
 
-							with m.Case(REQUEST_FRAMER_IF_CONTROL):
-								m.d.sync += [
-									self.framer_if_enable.eq(setup.value[0]),
-								]
+                            with m.Case():
+                                m.next = 'UNHANDLED'
 
-								m.next = 'FRAMER_IF_CONTROL'
+                with m.State('REG_READ'):
+                    # Wait for framer transaction to complete.
 
-							with m.Case():
-								m.next = 'UNHANDLED'
+                    # Connect our transmitter up to the output stream...
+                    m.d.comb += [
+                        transmitter.stream          .attach(self.interface.tx),
+                        Cat(transmitter.data[0:1])  .eq(self.data_rd),
+                        transmitter.max_length      .eq(1)
+                    ]
 
-				with m.State('REG_READ'):
-					# Wait for framer transaction to complete.
+                    # ... trigger it to respond when data's requested...
+                    with m.If(self.interface.data_requested):
+                        m.d.comb += [
+                            self.interface.handshakes_out.nak.eq(self.busy),
+                            transmitter.start.eq(~self.busy),
+                        ]
 
-					# Connect our transmitter up to the output stream...
-					m.d.comb += [
-						transmitter.stream          .attach(self.interface.tx),
-						Cat(transmitter.data[0:1])  .eq(self.data_rd),
-						transmitter.max_length      .eq(1)
-					]
+                    # ... and ACK our status stage.
+                    with m.If(self.interface.status_requested):
+                        m.d.comb += self.interface.handshakes_out.ack.eq(1)
+                        m.next = 'IDLE'
 
-					# ... trigger it to respond when data's requested...
-					with m.If(self.interface.data_requested):
-						m.d.comb += [
-							self.interface.handshakes_out.nak.eq(self.busy),
-							transmitter.start.eq(~self.busy),
-						]
+                with m.State('REG_WRITE'):
+                    # Wait for framer transaction to complete.
 
-					# ... and ACK our status stage.
-					with m.If(self.interface.status_requested):
-						m.d.comb += self.interface.handshakes_out.ack.eq(1)
-						m.next = 'IDLE'
+                    # Provide an response to the STATUS stage.
+                    with m.If(self.interface.status_requested):
 
-				with m.State('REG_WRITE'):
-					# Wait for framer transaction to complete.
+                        # If our stall condition is met, stall; otherwise, send a ZLP [USB 8.5.3].
+                        stall_condition = 0
+                        with m.If(stall_condition):
+                            m.d.comb += self.interface.handshakes_out.stall.eq(1)
+                        with m.Elif(self.busy):
+                            m.d.comb += self.interface.handshakes_out.nak.eq(1)
+                        with m.Else():
+                            m.d.comb += self.send_zlp()
 
-					# Provide an response to the STATUS stage.
-					with m.If(self.interface.status_requested):
+                    # Accept the relevant value after the packet is ACK'd...
+                    with m.If(self.interface.handshakes_in.ack):
+                        # m.d.comb += [
+                        # 	write_strobe      .eq(1),
+                        # 	new_value_signal  .eq(self.interface.setup.value[0:7])
+                        # ]
 
-						# If our stall condition is met, stall; otherwise, send a ZLP [USB 8.5.3].
-						stall_condition = 0
-						with m.If(stall_condition):
-							m.d.comb += self.interface.handshakes_out.stall.eq(1)
-						with m.Elif(self.busy):
-							m.d.comb += self.interface.handshakes_out.nak.eq(1)
-						with m.Else():
-							m.d.comb += self.send_zlp()
+                        # ... and then return to idle.
+                        m.next = 'IDLE'
 
-					# Accept the relevant value after the packet is ACK'd...
-					with m.If(self.interface.handshakes_in.ack):
-						# m.d.comb += [
-						# 	write_strobe      .eq(1),
-						# 	new_value_signal  .eq(self.interface.setup.value[0:7])
-						# ]
+                with m.State('FRAMER_IF_CONTROL'):
+                    
+                    # Provide an response to the STATUS stage.
+                    with m.If(self.interface.status_requested):
 
-						# ... and then return to idle.
-						m.next = 'IDLE'
+                        # If our stall condition is met, stall; otherwise, send a ZLP [USB 8.5.3].
+                        with m.If(stall_condition):
+                            m.d.comb += self.interface.handshakes_out.stall.eq(1)
+                        with m.Else():
+                            m.d.comb += self.send_zlp()
 
-				with m.State('FRAMER_IF_CONTROL'):
-					
-					# Provide an response to the STATUS stage.
-					with m.If(self.interface.status_requested):
+                    # Accept the relevant value after the packet is ACK'd...
+                    with m.If(self.interface.handshakes_in.ack):
 
-						# If our stall condition is met, stall; otherwise, send a ZLP [USB 8.5.3].
-						with m.If(stall_condition):
-							m.d.comb += self.interface.handshakes_out.stall.eq(1)
-						with m.Else():
-							m.d.comb += self.send_zlp()
+                        # ... and then return to idle.
+                        m.next = 'IDLE'
 
-					# Accept the relevant value after the packet is ACK'd...
-					with m.If(self.interface.handshakes_in.ack):
+                # UNHANDLED -- we've received a request we're not prepared to handle
+                with m.State('UNHANDLED'):
 
-						# ... and then return to idle.
-						m.next = 'IDLE'
+                    # When we next have an opportunity to stall, do so,
+                    # and then return to idle.
+                    with m.If(interface.status_requested | interface.data_requested):
+                        m.d.comb += interface.handshakes_out.stall.eq(1)
+                        m.next = 'IDLE'
 
-				# UNHANDLED -- we've received a request we're not prepared to handle
-				with m.State('UNHANDLED'):
-
-					# When we next have an opportunity to stall, do so,
-					# and then return to idle.
-					with m.If(interface.status_requested | interface.data_requested):
-						m.d.comb += interface.handshakes_out.stall.eq(1)
-						m.next = 'IDLE'
-
-		return m
+        return m
 
 class Device(Elaboratable):
 
-	def create_descriptors(self):
+    def elaborate(self, platform):
+        m = Module()
 
-		descriptors = DeviceDescriptorCollection()
+        m.submodules.car = platform.clock_domain_generator()
 
-		with descriptors.DeviceDescriptor() as d:
-			d.idVendor  = VENDOR_ID
-			d.idProduct = PRODUCT_ID
-			d.bcdDevice = 1.01
+        ###############################################################
+        # FPGA configuration
 
-			d.iManufacturer = "ShareBrained"
-			d.iProduct      = "Tedium X8"
-
-			d.bNumConfigurations = 1
-
-		with descriptors.ConfigurationDescriptor() as c:
-
-			c.bmAttributes = 0xC0
-			c.bMaxPower = 50
-
-			# TODO: If the configuration descriptor is too long (64 bytes?), something in the descriptor
-			# request generator stuff is broken and screws up enumeration. bMaxPacketSize0?
-
-			with c.InterfaceDescriptor() as i:
-				i.bInterfaceNumber = 0
-
-				with i.EndpointDescriptor() as e:
-					e.bEndpointAddress = USBDirection.IN.to_endpoint_address(INTERRUPT_ENDPOINT_NUMBER)
-					e.wMaxPacketSize   = MAX_INTERRUPT_PACKET_SIZE
-					e.bmAttributes     = USBTransferType.INTERRUPT
-
-					# Request that we be polled once ber microseconds (2 ^ 3 microframes).
-					e.bInterval        = 4
-
-			with c.InterfaceDescriptor() as i:
-				i.bInterfaceNumber = 1
-				i.bAlternateSetting = 0
-
-			with c.InterfaceDescriptor() as i:
-				i.bInterfaceNumber = 1
-				i.bAlternateSetting = 1
-
-				with i.EndpointDescriptor() as e:
-					e.bEndpointAddress = USBDirection.OUT.to_endpoint_address(ISO_OUT_ENDPOINT_NUMBER)
-					e.wMaxPacketSize   = (MAX_ISO_OUT_PACKETS_PER_INTERVAL << 11) | MAX_ISO_OUT_PACKET_SIZE
-					e.bmAttributes     = (USBUsageType.DATA << 4) | (USBSynchronizationType.ASYNC << 2) | USBTransferType.ISOCHRONOUS
-
-					e.bInterval        = 1
-
-			with c.InterfaceDescriptor() as i:
-				i.bInterfaceNumber = 2
-				i.bAlternateSetting = 0
-
-			with c.InterfaceDescriptor() as i:
-				i.bInterfaceNumber = 2
-				i.bAlternateSetting = 1
-
-				with i.EndpointDescriptor() as e:
-					e.bEndpointAddress = USBDirection.IN.to_endpoint_address(ISO_IN_ENDPOINT_NUMBER)
-					e.wMaxPacketSize   = (MAX_ISO_IN_PACKETS_PER_INTERVAL << 11) | MAX_ISO_IN_PACKET_SIZE
-					e.bmAttributes     = (USBUsageType.DATA << 4) | (USBSynchronizationType.ASYNC << 2) | USBTransferType.ISOCHRONOUS
-
-					e.bInterval        = 1
-
-			# TODO: Force the number of interfaces to "2", as two of the interfaces have multiple
-			# alternate settings, and the USB protocol library doesn't seem to care about this.
-			from usb_protocol.types.descriptors import StandardDescriptorNumbers
-			assert(c._type_counts[StandardDescriptorNumbers.INTERFACE]) == 5
-			c._type_counts[StandardDescriptorNumbers.INTERFACE] = 3
-			assert(c._type_counts[StandardDescriptorNumbers.INTERFACE]) == 3
-
-		# print(list(descriptors))
-
-		return descriptors
-
-	def elaborate(self, platform):
-		m = Module()
-
-		m.submodules.car = platform.clock_domain_generator()
-
-		###############################################################
-		# FPGA configuration
-
-		program = platform.request("program")
-		m.d.comb += [
-			program.eq(0),
-		]
-
-		###############################################################
-		# USB
-
-		ulpi = platform.request(platform.default_usb_connection)
-		m.submodules.usb = usb = USBDevice(bus=ulpi) #, handle_clocking=False)
-
-		# USB standard requests handler
-
-		descriptors = self.create_descriptors()
-		control_ep = usb.add_standard_control_endpoint(descriptors)
-
-		# Create an interrupt endpoint which will carry the value of our counter to the host
-		# each time our interrupt EP is polled.
-
-		# Create the 32-bit counter we'll be using as our status signal.
-		counter = Signal(32)
-		m.d.usb += counter.eq(counter + 1)
-
-		status_ep = USBSignalInEndpoint(
-			width=32,
-			endpoint_number=INTERRUPT_ENDPOINT_NUMBER,
-			endianness="big"
-		)
-		usb.add_endpoint(status_ep)
-		
-		m.d.comb += status_ep.signal.eq(counter)
-
-		# Connect our device as a high speed device by default.
-		m.d.comb += [
-			usb.connect          .eq(1),
-			usb.full_speed_only  .eq(1 if os.getenv('LUNA_FULL_ONLY') else 0),
-		]
-
-		###############################################################
-		# Framer registers interface to USB
-
-		framer_request = DomainRenamer("usb")(FramerBusVendorRequest())
-		control_ep.add_request_handler(framer_request)
-
-		framer_bus = platform.request('framer_bus')
-		m.submodules.framer = framer = DomainRenamer("usb")(FramerInterface(bus=framer_bus))
-
-		m.d.comb += [
-			framer.address.eq(framer_request.address),
-			framer.data_wr.eq(framer_request.data_wr),
-			framer.start.eq(framer_request.start),
-			framer.write.eq(framer_request.write),
-			framer_request.data_rd.eq(framer.data_rd),
-			framer_request.busy.eq(framer.busy),
-		]
-
-		###############################################################
-		# Framer miscellaneous pin config
-
-		framer_if_enable = Signal()
-		m.d.comb += framer_if_enable.eq(framer_request.framer_if_enable)
-
-		mclkin = platform.request("mclkin")
-		txon = platform.request("txon")
-		extosc8k = platform.request("extosc8k")
-		rxtsel = platform.request("rxtsel")
-
-		m.d.comb += [
-			mclkin.eq(ClockSignal("clkref")),
-			txon.eq(framer_if_enable),		# 0x0FN2.TXON_n must still be set to 1 to enable driver.
-			extosc8k.eq(0),
-			rxtsel.eq(1),
-		]
-
-		###############################################################
-		# Framer span interfaces, clock recovery and selection.
-
-		rx_bus = [platform.request("rx", n) for n in range(8)]
-
-		recovered_clocks = Array([Signal() for _ in range(len(rx_bus))])
-		recovered_clock_select = Signal(range(len(recovered_clocks)))
-		recovered_clock = Signal()
-		recovered_clock_sync = Signal()
-
-		m.d.comb += [
-			# TODO: Make this controllable.
-			recovered_clock_select.eq(2),
-			recovered_clock.eq(recovered_clocks[recovered_clock_select]),
-		]
-		base_rate_clock = recovered_clock
-
-		m.d.sync += recovered_clock_sync.eq(recovered_clock)
-		capture_strobe = Fell(recovered_clock_sync)
-
-		m.submodules.frame_sync = frame_sync = BaseRateSync()
-		m.d.comb += frame_sync.strobe_in.eq(capture_strobe)
-
-
-		###############################################################
-		# Receivers
-
-		self.rx = rx = []
-		for n, bus in enumerate(rx_bus):
-			o = BaseRateReceiver(bus=bus)
-
-			m.d.comb += [
-				o.enable.eq(framer_if_enable),
-				o.start_of_frame.eq(frame_sync.start_of_frame),
-				o.base_rate_clock.eq(base_rate_clock),
-				o.capture_strobe.eq(capture_strobe),
-				recovered_clocks[n].eq(o.recovered_clock),
-			]
-
-			m.submodules += o
-			rx.append(o)
-
-		###############################################################
-		# Transmit
-
-		tx_bus = [platform.request("tx", n) for n in range(8)]
-
-		self.tx = tx = []
-		for n, bus in enumerate(tx_bus):
-			o = BaseRateTransmitter(bus=bus)
-
-			tx_bit = rx[(n+7) % len(rx)].data
-
-			m.d.comb += [
-				o.enable.eq(framer_if_enable),
-				o.data.eq(tx_bit),
-				o.base_rate_clock.eq(base_rate_clock),
-				o.start_of_frame.eq(frame_sync.start_of_frame),
-				o.start_of_multiframe.eq(frame_sync.start_of_multiframe),
-			]
-
-			m.submodules += o
-			tx.append(o)
-
-		###############################################################
-		# Transmit
-
-		###############################################################
-		# Test Points
-
-		# NOTE: LIU loop-back modes LIUCCR2.LOOP2_n:
-		# "Dual" (0b100) and "Digital" (0b111) will go to wacky RXSERCLK
-		# rates (72MHz?!) if clock source select CSR.CSS is set to "Loop
-		# Timing Mode".
-
-		tp7  = platform.request("tp7" )
-		tp9  = platform.request("tp9" )
-		tp10 = platform.request("tp10")
-
-		m.d.comb += [
-			# tp7.eq( ClockSignal("clk_16m384")),
-			# tp9.eq( ClockSignal("sync")),
-			# tp10.eq(ClockSignal("usb")),
-
-			# tp7.eq( rx0.serclk.i),
-			# tp9.eq( rx0.sync),
-			# tp10.eq(rx0.ser),
-
-			# tp7.eq( rx0serclk_pulse),
-			# tp9.eq( new_frame),
-			# tp10.eq(rx0_fifo.r_rdy),
-
-			# tp7.eq( rx0_frame[0]),
-			# tp9.eq( usb_frame[0]),
-			# tp10.eq(new_frame),
-
-			# tp7.eq( rx0_fifo.r_en),
-			# tp9.eq( rx0_fifo.r_rdy),
-			# tp10.eq(new_frame),
-
-			# tp7.eq( rx0_fifo.r_level == 0),
-			# tp9.eq( rx0_fifo.r_level == 1),
-			# tp10.eq(rx0_fifo.r_level >= 2),
-
-			# tp7.eq( iso_out_ep.write_en),
-			# tp9.eq( iso_out_ep.write_commit),
-			# tp10.eq(iso_out_ep.write_discard),
-
-			# tp7.eq( tx0_frame[0]),
-			# tp9.eq( tx0_frame_sync),
-			# tp10.eq(tx0_fifo.r_rdy),
-
-			tp7.eq( tx[2].start_of_multiframe),
-			tp9.eq( tx[2].start_of_frame),
-			tp10.eq(tx[2].base_rate_clock),
-		]
-
-		return m
+        program = platform.request("program")
+        m.d.comb += program.eq(0)
+
+        ###############################################################
+        # USB
+
+        ulpi = platform.request(platform.default_usb_connection)
+        m.submodules.usb = usb = USBDevice(bus=ulpi)
+
+        control_ep = usb.add_control_endpoint()
+        blacklist_standard_request_handlers = []
+
+        request_handler_set_interface = SetInterfaceRequestHandler()
+        control_ep.add_request_handler(request_handler_set_interface)
+        blacklist_standard_request_handlers += [
+            lambda setup:   (setup.type    ==  USBRequestType.STANDARD)
+                          & (setup.request == USBStandardRequests.SET_INTERFACE)
+        ]
+
+        d = Descriptors().create_descriptors()
+        control_ep.add_standard_request_handlers(d, blacklist=blacklist_standard_request_handlers)
+
+        interface_frame_stream_active = request_handler_set_interface.frame_stream_interface_altsetting == Descriptors.AlternateSetting.Active
+
+        # Connect our device as a high speed device by default.
+        m.d.comb += [
+            usb.connect          .eq(1),
+            usb.full_speed_only  .eq(0),
+        ]
+
+        ###############################################################
+        # Framer registers interface to USB
+
+        microprocessor_request = DomainRenamer("usb")(FramerMicroprocessorBusVendorRequest())
+        control_ep.add_request_handler(microprocessor_request)
+
+        microprocessor_bus = platform.request('microprocessor_bus')
+        microprocessor_if = m.submodules.microprocessor_if = DomainRenamer("usb")(MicroprocessorInterface(bus=microprocessor_bus))
+
+        m.d.comb += [
+            microprocessor_if.address.eq(microprocessor_request.address),
+            microprocessor_if.data_wr.eq(microprocessor_request.data_wr),
+            microprocessor_if.start.eq(microprocessor_request.start),
+            microprocessor_if.write.eq(microprocessor_request.write),
+            microprocessor_request.data_rd.eq(microprocessor_if.data_rd),
+            microprocessor_request.busy.eq(microprocessor_if.busy),
+        ]
+
+        ###############################################################
+        # Framer interrupt
+
+        # Create an interrupt endpoint which will carry the value of our counter to the host
+        # each time our interrupt EP is polled.
+
+        if False:
+            interrupt_ep = USBSignalInEndpointTedium(
+                width=32,
+                endpoint_number=Descriptors.EndpointNumber.Interrupt,
+                endianness="big"
+            )
+            usb.add_endpoint(interrupt_ep)
+
+            # TODO: SEND SOMETHING USEFUL OVER THE INTERRUPT!        
+            m.d.comb += interrupt_ep.signal.eq(0x69696969)
+
+            # NOTE: WOW, WHAT A FOOT-GUN! Using Fell() or Rose(), don't forget
+            # to specify your clock domain, or you'll get "sync" by default,
+            # which will cause of erratic behavior.
+
+            # Detect rising edge of framer `int` (inverted/normalized INT#) signal, feed to interrupt endpoint.
+            framer_int_usb = Signal()
+            m.d.usb += framer_int_usb.eq(microprocessor_bus.int)
+            framer_int_set_strobe = Rose(framer_int_usb, domain="usb")
+
+            m.d.comb += interrupt_ep.event_set_strobe.eq(framer_int_set_strobe)
+
+        ###############################################################
+        # Framer miscellaneous pin config
+
+        framer_outputs_enable = Signal()
+        m.d.comb += framer_outputs_enable.eq(microprocessor_request.framer_if_enable)
+
+        mclkin = platform.request("mclkin")
+        txon = platform.request("txon")
+        extosc8k = platform.request("extosc8k")
+        rxtsel = platform.request("rxtsel")
+
+        m.d.comb += [
+            mclkin.eq(ClockSignal("clkref")),
+            txon.eq(framer_outputs_enable),		# 0x0FN2.TXON_n must still be set to 1 to enable driver.
+            extosc8k.eq(0),
+            rxtsel.eq(1),
+        ]
+
+        ###############################################################
+        # USB isochronous loopback for testing.
+
+        def usb_in_sequence(m: Module, usb: USBDevice, ep_in: USBIsochronousInEndpointTedium):
+            """
+            Generate IN packets of three different lengths, with an incrementing sequence.
+            """
+            usb_frame_counter = Signal(8)
+            with m.If(usb.sof_detected):
+                m.d.usb += usb_frame_counter.eq(usb_frame_counter + 1)
+
+            # Create pseudo-random IN packet length.
+            bytes_in_frame = Signal.like(ep_in.bytes_in_frame)
+            with m.Switch(usb_frame_counter):
+                with m.Case(211):
+                    m.d.comb += bytes_in_frame.eq(211 * 0 + 12)
+                with m.Case(53):
+                    m.d.comb += bytes_in_frame.eq(211 * 2 + 12)
+                with m.Default():
+                    m.d.comb += bytes_in_frame.eq(211 * 1 + 12)
+
+            usb_in_counter = Signal(8)
+            with m.If(ep_in.byte_advance):
+                m.d.usb += usb_in_counter.eq(usb_in_counter + 1)
+
+            m.d.comb += [
+                ep_in.bytes_in_frame.eq(bytes_in_frame),
+                ep_in.value.eq(usb_in_counter),
+            ]
+
+        def usb_in_counter(m: Module, usb: USBDevice, ep_in: USBIsochronousInEndpointTedium):
+            """
+            Generate IN packets that count USB (micro)frames.
+            """
+            usb_frame_counter = Signal(32)
+            with m.If(usb.sof_detected):
+                m.d.usb += usb_frame_counter.eq(usb_frame_counter + 1)
+
+            m.d.comb += [
+                ep_in.bytes_in_frame.eq(4),
+                ep_in.value.eq(usb_frame_counter.word_select(ep_in.address, 8)),
+            ]
+
+        def usb_out_in_loopback_local(m: Module, usb: USBDevice, ep_out: USBIsochronousOutEndpointTedium, ep_in: USBIsochronousInEndpointTedium):
+            """
+            Put packets from OUT into a FIFO, then read that FIFO to IN, in three different lengths.
+            """
+            packet_size_two_frames  = 211 * 2 + 12
+            packet_size_one_frame   = 211 * 1 + 12
+            packet_size_zero_frames = 0
+            
+            loopback_fifo = m.submodules.loopback_fifo = DomainRenamer({"sync": "usb"})(SyncFIFOBuffered(width=8, depth=2048))
+
+            bytes_in_frame = Signal.like(ep_in.bytes_in_frame)
+            with m.If(loopback_fifo.r_level >= packet_size_two_frames):
+                m.d.comb += bytes_in_frame.eq(packet_size_two_frames)
+            with m.Elif(loopback_fifo.r_level >= packet_size_one_frame):
+                m.d.comb += bytes_in_frame.eq(packet_size_one_frame)
+            with m.Else():
+                m.d.comb += bytes_in_frame.eq(packet_size_zero_frames)
+
+            m.d.comb += [
+                ep_in.bytes_in_frame.eq(bytes_in_frame),
+                loopback_fifo.r_en.eq(ep_in.byte_advance),
+                ep_in.value.eq(loopback_fifo.r_data),
+            ]
+
+            m.d.comb += [
+                loopback_fifo.w_en.eq(ep_out.write_en),
+                loopback_fifo.w_data.eq(ep_out.write_payload),
+            ]
+
+        def usb_framer(m: Module, usb: USBDevice, ep_out: USBIsochronousOutEndpointTedium, ep_in: USBIsochronousInEndpointTedium, output_enable: Signal):
+            """
+            Loop USB OUT data to USB IN through FIFOs connected via a timeslot interface.
+            """
+
+            rx_fifo_depth = 8
+            tx_fifo_depth = 32
+
+            rx_frame_report = RxFrameReport()
+            rx_frame_record_size = TIMESLOTS_PER_FRAME + rx_frame_report.length_bytes()
+
+            tx_frame_report = TxFrameReport()
+            tx_frame_record_size = TIMESLOTS_PER_FRAME + tx_frame_report.length_bytes()
+
+            rx_usb_report = RxUSBReport()
+            tx_usb_report = TxUSBReport()
+
+            sclk = Signal()
+            sclk_index = Signal(range(CHANNELS))
+            m.d.comb += sclk_index.eq(0)
+
+            serclk = Signal()
+
+            bit_timing = m.submodules.bit_timing = BitTiming()
+            m.d.comb += bit_timing.serclk.eq(serclk)
+
+            system_timing = m.submodules.system_timing = SystemTiming(TIMESLOTS_PER_CHANNEL)
+            m.d.comb += system_timing.bit_end_strobe.eq(bit_timing.iface.bit_end_strobe)
+
+            rx_phys = [platform.request("rx", n) for n in range(CHANNELS)]
+            rx_blocks: List[RxBlock] = []
+            for i, phy in enumerate(rx_phys):
+                rx_block = RxBlock(phy, system_timing.iface)
+                rx_blocks.append(rx_block)
+                m.submodules[f"rx_block{i}"] = rx_block
+
+                m.d.comb += [
+                    rx_block.serclk.eq(serclk),
+                    rx_block.output_enable.eq(output_enable),
+                ]
+            rx_timeslots = [rx_block.timeslot for rx_block in rx_blocks]
+
+            rx_sclks = Cat([block.sclk for block in rx_blocks])
+            m.d.comb += sclk.eq(rx_sclks.bit_select(sclk_index, 1))
+            m.d.comb += serclk.eq(sclk)
+
+            rx_fifo        = m.submodules.rx_fifo        = PagedAsyncFIFO(rx_frame_record_size, rx_fifo_depth, w_domain="sync", r_domain="usb")
+            rx_framer_fifo = m.submodules.rx_framer_fifo = RxFramerToFIFOAdapter(rx_fifo.writer, rx_timeslots, system_timing.iface, rx_frame_report)
+            rx_fifo_usb    = m.submodules.rx_fifo_usb    = RxFIFOToUSBInAdapter(rx_fifo.reader, ep_in, rx_usb_report)
+            m.d.comb += rx_fifo_usb.start_of_frame.eq(usb.sof_detected)
+
+            # tx_phys = [platform.request("tx", n) for n in range(CHANNELS)]
+            # tx_blocks: List[TxBlock] = []
+            # for i, phy in enumerate(tx_phys):
+            #     tx_block = TxBlock(phy, system_timing.iface)
+            #     tx_blocks.append(tx_block)
+            #     m.submodules[f"tx_block{i}"] = tx_block
+
+            #     m.d.comb += [
+            #         tx_block.serclk.eq(serclk),
+            #         tx_block.output_enable.eq(output_enable),
+            #     ]
+            # tx_timeslots = [tx_block.timeslot for tx_block in tx_blocks]
+
+            # tx_fifo        = m.submodules.tx_fifo        = PagedAsyncFIFO(tx_frame_record_size, tx_fifo_depth, w_domain="usb", r_domain="sync")
+            # tx_fifo_framer = m.submodules.tx_fifo_framer = TxFIFOToFramerAdapter(tx_fifo.reader, tx_timeslots, system_timing.iface, tx_frame_report)
+            # tx_usb_fifo    = m.submodules.tx_usb_fifo    = TxUSBOutToFIFOAdapter(ep_out, tx_fifo.writer, tx_usb_report)
+            # m.d.comb += tx_usb_fifo.start_of_frame.eq(usb.sof_detected)
+
+            with m.If(usb.sof_detected):
+                m.d.usb += [
+                    rx_usb_report.sof_count.eq(rx_usb_report.sof_count + 1),
+                    rx_usb_report.fifo_rx_level.eq(rx_fifo.reader.r_level2),
+                    # rx_usb_report.fifo_tx_level.eq(tx_fifo.writer.w_level2),
+                    rx_usb_report.sequence_count.eq(rx_usb_report.sequence_count + 1),
+                ]
+            with m.If(rx_fifo.reader.r_underflow):
+                m.d.usb += rx_usb_report.fifo_rx_underflow_count.eq(rx_usb_report.fifo_rx_underflow_count + 1),
+            # with m.If(tx_fifo.writer.w_overflow):
+            #     m.d.usb += rx_usb_report.fifo_tx_overflow_count.eq(rx_usb_report.fifo_tx_overflow_count + 1),
+
+            with m.If(system_timing.iface.frame_strobe):
+                m.d.sync += [
+                    rx_frame_report.frame_count.eq(rx_frame_report.frame_count + 1),
+                ]
+
+        ###############################################################
+        # USB isochronous endpoints for transfer of timeslot data.
+
+        usb_iso_in_ep = USBIsochronousInEndpointTedium(
+            endpoint_number=Descriptors.EndpointNumber.FrameStream,
+            max_packet_size=Descriptors.FRAME_BYTES_MAX,
+        )
+        usb.add_endpoint(usb_iso_in_ep)
+
+        usb_iso_out_ep = USBIsochronousOutEndpointTedium(
+            endpoint_number=Descriptors.EndpointNumber.FrameStream,
+            max_packet_size=Descriptors.FRAME_BYTES_MAX,
+        )
+        usb.add_endpoint(usb_iso_out_ep)
+
+        # usb_in_sequence(m, usb, usb_iso_in_ep)
+        # usb_in_counter(m, usb, usb_iso_in_ep)
+        # usb_out_in_loopback(m, usb, usb_iso_out_ep, usb_iso_in_ep)
+        usb_framer(m, usb, usb_iso_out_ep, usb_iso_in_ep, framer_outputs_enable)
+
+        ###############################################################
+        # Framer span interfaces, clock recovery and selection.
+
+        if False:
+            # Report to be sent to the host with each frame of timeslot data.
+            framer_report = FramerReport()
+
+            # Report to be sent to the host with each USB frame (which may
+            # consist of zero, one, or two timeslot frames.
+            usb_report = USBReport()
+
+            rx_fifo_record_size = TIMESLOTS_PER_CHANNEL * CHANNELS + framer_report.size_bytes
+            rx_fifo_depth = 8
+            tx_fifo_record_size = TIMESLOTS_PER_CHANNEL * CHANNELS
+            tx_fifo_depth = 32
+
+            assert((rx_fifo_record_size * 2 + usb_report.size_bytes) <= Descriptors.FRAME_BYTES_MAX)
+            assert((tx_fifo_record_size * 2                        ) <= Descriptors.FRAME_BYTES_MAX)
+
+            # Selected recovered receive clock.
+            sclk = Signal()
+
+            # Serial clock for receive and transmit framer serial data.
+            serclk = Signal()
+
+            # Physical receive interfaces from the framer integrated circuit.
+            rx_phys = [platform.request("rx", n) for n in range(CHANNELS)]
+
+            # Physical transmit interfaces to the framer integrated circuit.
+            tx_phys = [platform.request("tx", n) for n in range(CHANNELS)]
+
+            # Bit timing determines when serial data is launched or captured
+            # on the FPGA <-> framer interfaces.
+            bit_timing = m.submodules.bit_timing = BitTiming()
+            m.d.comb += bit_timing.serclk.eq(serclk)
+
+            # System timing is the "sync" domain global timing for frame and
+            # timeslot data. Framer receive and transmit interfaces are abstracted
+            # (time-offset) appropriately so that this single global timing
+            # reference applies to all receive and transmit interfaces.
+            system_timing = m.submodules.system_timing = SystemTiming(TIMESLOTS_PER_CHANNEL)
+            m.d.comb += system_timing.bit_end_strobe.eq(bit_timing.iface.bit_end_strobe)
+
+            # Top-level block containing all receive interface and timing logic
+            # to turn raw physical/electrical receive interfaces from the framer
+            # into timeslot data synchronized to system timing.
+
+            rx = m.submodules.rx = Rx(rx_phys, system_timing, framer_report)
+            rx_fifo = m.submodules.rx_fifo = PagedAsyncFIFO(rx_fifo_record_size, rx_fifo_depth, r_domain="usb", w_domain="sync")
+            rx_fifo_writer = m.submodules.rx_fifo_writer = PagedFIFOWriteInterface(rx.iface, rx_fifo.writer)
+            rx_fifo_reader = m.submodules.rx_fifo_reader = RxFIFOToUSBInAdapter(rx_fifo.reader, usb_iso_in_ep, usb_report)
+
+            tx = m.submodules.tx = Tx(tx_phys, system_timing)
+            tx_fifo = m.submodules.tx_fifo = PagedAsyncFIFO(tx_fifo_record_size, tx_fifo_depth, r_domain="sync", w_domain="usb")
+
+            # Receiver recovered clock and serial clock routing.
+            m.d.comb += [
+                # Choose a recovered receiver clock.
+                rx.sclk_index.eq(0),
+                sclk.eq(rx.sclk),
+
+                # Use the selected recovered receiver clock as the system serial clock.
+                serclk.eq(sclk),
+                rx.serclk.eq(serclk),
+                tx.serclk.eq(serclk),
+            ]
+
+            m.d.comb += [
+                rx.output_enable.eq(framer_outputs_enable),
+                tx.output_enable.eq(framer_outputs_enable),
+            ]
+
+            ###############################################################
+            # USB OUT -> TX FIFO -> Framer
+
+            m.submodules.usb_to_tx_fifo = usb_to_tx_fifo = USBToPagedFIFOAdapter(usb_iso_out_ep, microprocessor_if.tx_fifo_writer)
+
+        ###############################################################
+        # Test Points
+
+        # NOTE: LIU loop-back modes LIUCCR2.LOOP2_n:
+        # "Dual" (0b100) and "Digital" (0b111) will go to wacky RXSERCLK
+        # rates (72MHz?!) if clock source select CSR.CSS is set to "Loop
+        # Timing Mode".
+
+        # rx_fifo_r_en_toggle = Signal()
+        # with m.If(self.rx_fifo.debug_fifo_r_en):
+        #     m.d.usb += rx_fifo_r_en_toggle.eq(~rx_fifo_r_en_toggle)
+
+        tp9  = platform.request("tp9" ) # FPGA P2, left of two center pads near SPI flash
+        tp7  = platform.request("tp7" ) # FPGA N1, right of two center pads near SPI flash
+        tp10 = platform.request("tp10") # FPGA C4, right of a ground pad near framer
+
+        m.d.comb += [
+            tp9.eq( 0),
+            tp7.eq( 0),
+            tp10.eq(0),
+        ]
+
+        return m
 
 if __name__ == "__main__":
-	# from luna import top_level_cli
-	# device = top_level_cli(Device)
+    from tedium.gateware.xplatform.tedium import TediumX8Platform
+    platform = TediumX8Platform()
 
-	TediumX8Platform().build(Device(), do_program=True)
+    # Using `top_level_cli`, I don't get a build directory, which would be nice
+    # to peruse every once in a while.
+    # device = top_level_cli(Device)
 
+    platform.build(Device(), do_program=True)

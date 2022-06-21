@@ -9,7 +9,9 @@ These interfaces provide interfaces for connecting memories or memory-like
 interfaces to hosts via isochronous pipes.
 """
 
-from nmigen         import Elaboratable, Module, Signal
+from amaranth         import Elaboratable, Module, Signal
+from luna.gateware.memory import TransactionalizedFIFO
+from luna.gateware.stream import StreamInterface
 
 from luna.usb2 import EndpointInterface
 
@@ -78,10 +80,14 @@ class USBIsochronousInEndpointTedium(Elaboratable):
         self.next_address   = Signal.like(self.address)
         self.value          = Signal(8)
 
-        self.data_requested = Signal()
-        self.data_packet_starting = Signal()
-        self.byte_advance = Signal()
+        self.send_data      = Signal()
+        # self.data_packet_starting = Signal()
+        self.byte_advance   = Signal()
 
+        # Strobes when a data packet is being sent.
+        self.packet_strobe = Signal()
+
+        self.end_of_non_zlp_packet = Signal()
 
     def elaborate(self, platform):
         m = Module()
@@ -90,14 +96,10 @@ class USBIsochronousInEndpointTedium(Elaboratable):
         interface        = self.interface
         out_stream       = interface.tx
         new_frame        = interface.tokenizer.new_frame
-
+        
         targeting_ep_num = (interface.tokenizer.endpoint == self._endpoint_number)
         targeting_us     = targeting_ep_num & interface.tokenizer.is_in
         data_requested   = targeting_us & interface.tokenizer.ready_for_response
-
-        m.d.comb += [
-            self.data_requested.eq(data_requested),
-        ]
 
         # Track our state in our transmission.
         bytes_left_in_frame  = Signal.like(self.bytes_in_frame)
@@ -139,18 +141,19 @@ class USBIsochronousInEndpointTedium(Elaboratable):
             interface.tx_pid_toggle  .eq(next_data_pid)
         ]
 
-        m.d.usb += [
-            self.data_packet_starting.eq(0),
+        m.d.comb += [
+            self.send_data.eq(data_requested & (bytes_left_in_frame > 0)),
+            # self.byte_advance.eq(out_stream.ready),
+            self.byte_advance.eq(0),
+            self.packet_strobe.eq(out_stream.first & out_stream.ready),
         ]
 
-        m.d.comb += [
-            self.byte_advance.eq(out_stream.ready),
-        ]
+        m.d.usb += self.end_of_non_zlp_packet.eq(0)
 
         #
         # Core sequencing FSM.
         #
-        with m.FSM(domain="usb"):
+        with m.FSM(domain="usb", reset="IDLE"):
 
             # IDLE -- the host hasn't yet requested data from our endpoint.
             with m.State("IDLE"):
@@ -168,7 +171,7 @@ class USBIsochronousInEndpointTedium(Elaboratable):
                     # If we have data to send, send it.
                     with m.If(bytes_left_in_frame):
                         m.d.usb += out_stream.first.eq(1)
-                        m.d.usb += self.data_packet_starting.eq(1)
+                        # m.d.usb += self.data_packet_starting.eq(1)
                         m.next = "SEND_DATA"
 
                     # Otherwise, we'll send a ZLP.
@@ -199,6 +202,8 @@ class USBIsochronousInEndpointTedium(Elaboratable):
 
                 # We'll advance each time our data is accepted.
                 with m.If(out_stream.ready):
+                    m.d.comb += self.byte_advance.eq(1)
+
                     m.d.usb += out_stream.first.eq(0)
 
                     # Mark the relevant byte as sent...
@@ -220,7 +225,9 @@ class USBIsochronousInEndpointTedium(Elaboratable):
                             next_data_pid        .eq(next_data_pid - 1),
 
                             # Mark our next packet as being a full one.
-                            bytes_left_in_packet .eq(self._max_packet_size)
+                            bytes_left_in_packet .eq(self._max_packet_size),
+
+                            self.end_of_non_zlp_packet.eq(1),
                         ]
                         m.next = "IDLE"
 
@@ -235,8 +242,6 @@ class USBIsochronousInEndpointTedium(Elaboratable):
                 m.next = "IDLE"
 
         return m
-
-
 
 
 
@@ -298,17 +303,19 @@ class USBIsochronousOutEndpointTedium(Elaboratable):
         # self.stream    = StreamInterface()
         self.interface = EndpointInterface()
 
-        # self.targeting_endpoint   = Signal()
+        self.targeting_endpoint   = Signal()
         # self.data_received = Signal()
         # self.data0_phase = Signal()
         # self.valid = Signal()
         # self.next = Signal()
         # self.data = Signal(8)
 
-        self.write_payload = Signal(8)
-        self.write_en = Signal()
-        self.write_commit = Signal()
-        self.write_discard = Signal()
+        self.value = Signal(8)
+        self.byte_advance = Signal()
+        # self.write_commit = Signal()
+        # self.write_discard = Signal()
+
+        # self.write_first = Signal()
 
     def elaborate(self, platform):
         m = Module()
@@ -372,16 +379,163 @@ class USBIsochronousOutEndpointTedium(Elaboratable):
 
 
         m.d.comb += [
-            self.write_payload.eq(rx.payload),
-            self.write_en.eq(targeting_endpoint & rx.next & rx.valid),
+            self.value.eq(rx.payload),
+            self.byte_advance.eq(targeting_endpoint & rx.next & rx.valid),
 
             # We'll keep data if our packet finishes with a valid CRC; and discard it otherwise.
-            self.write_commit.eq(targeting_endpoint & boundary_detector.complete_out),
-            self.write_discard.eq(targeting_endpoint & boundary_detector.invalid_out),
+            # self.write_commit.eq(targeting_endpoint & boundary_detector.complete_out),
+            # self.write_discard.eq(targeting_endpoint & boundary_detector.invalid_out),
 
-            # No handshakes for ISO OUT.
+            # self.write_first.eq(targeting_endpoint & rx_first),
         ]
 
         # TODO: Track PID? MDATA vs. DATA0/1/2.
+
+        # DEBUG:
+        m.d.comb += self.targeting_endpoint.eq(targeting_endpoint)
+
+        return m
+
+class USBIsochronousOutStreamEndpoint(Elaboratable):
+    """ Endpoint interface that receives isochronous data from the host, and produces a simple data stream.
+    Used for repeatedly streaming data from a host.
+    Intended to be useful as a transport for e.g. video or audio data.
+    Attributes
+    ----------
+    stream: StreamInterface, output stream
+        Full-featured stream interface that carries the data we've received from the host.
+        Note that this stream is *transaction* oriented; which means that First and Last indicate
+        the start and end of an individual data packet. This means that short packet detection is
+        the responsibility of the stream's consumer.
+    interface: EndpointInterface
+        Communications link to our USB device.
+    Parameters
+    ----------
+    endpoint_number: int
+        The endpoint number (not address) this endpoint should respond to.
+    max_packet_size: int
+        The maximum packet size for this endpoint. If this there isn't either
+        `buffer_size` of, if not given, `max_packet_size * 2` space in
+        the endpoint buffer, this endpoint will silently discard the extraneous data
+    buffer_size: int, optional
+        The total amount of data we'll keep in the buffer; typically three max-packet-sizes or more.
+        Defaults to twice the maximum packet size.
+    """
+
+    """
+    Borrowed from:
+    https://github.com/amaranth-community-unofficial/usb2-highspeed-core/blob/main/luna/gateware/usb/usb2/endpoints/isochronous.py
+    """
+
+    def __init__(self, *, endpoint_number, max_packet_size, buffer_size=None, name=None):
+        self._endpoint_number = endpoint_number
+        self._max_packet_size = max_packet_size
+        self._buffer_size = buffer_size if (buffer_size is not None) else (self._max_packet_size * 2)
+        # name = f"isochronous_endpoint{endpoint_number}" if name is None else name
+
+        #
+        # I/O port
+        #
+        self.stream    = StreamInterface() #name=name)
+        self.interface = EndpointInterface()
+
+
+
+        # Debug bits
+        self.targeting_endpoint = Signal()
+        self.rx_first = Signal()
+        self.rx_next = Signal()
+        self.rx_valid = Signal()
+        self.rx_last = Signal()
+        self.is_first_byte = Signal()
+
+
+    def elaborate(self, platform):
+        m = Module()
+
+        stream    = self.stream
+        interface = self.interface
+        tokenizer = interface.tokenizer
+
+        #
+        # Internal state.
+        #
+
+        # Stores whether this is the first byte of a transfer. True if the previous byte had its `last` bit set.
+        is_first_byte = Signal(reset=1)
+
+        #
+        # Receiver logic.
+        #
+
+        # Create a version of our receive stream that has added `first` and `last` signals, which we'll use
+        # internally as our main stream.
+        m.submodules.boundary_detector = boundary_detector = USBOutStreamBoundaryDetector()
+        m.d.comb += [
+            interface.rx                   .stream_eq(boundary_detector.unprocessed_stream),
+            boundary_detector.complete_in  .eq(interface.rx_complete),
+            boundary_detector.invalid_in   .eq(interface.rx_invalid),
+        ]
+
+        rx       = boundary_detector.processed_stream
+        rx_first = boundary_detector.first
+        rx_last  = boundary_detector.last
+
+        # Create a Rx FIFO.
+        m.submodules.fifo = fifo = TransactionalizedFIFO(width=10, depth=self._buffer_size, name="rx_fifo", domain="usb")
+
+        # Generate our `first` bit from the most recently transmitted bit.
+        # Essentially, if the most recently valid byte was accompanied by an asserted `last`, the next byte
+        # should have `first` asserted.
+        with m.If(stream.valid & stream.ready):
+            m.d.usb += is_first_byte.eq(stream.last)
+
+        #
+        # Create some basic conditionals that will help us make decisions.
+        #
+
+        endpoint_number_matches  = (tokenizer.endpoint == self._endpoint_number)
+        targeting_endpoint       = endpoint_number_matches & tokenizer.is_out
+        sufficient_space         = (fifo.space_available >= self._max_packet_size)
+        okay_to_receive          = targeting_endpoint & sufficient_space
+
+        m.d.comb += [
+            # We'll always populate our FIFO directly from the receive stream; but we'll also include our
+            # "short packet detected" signal, as this indicates that we're detecting the last byte of a transfer.
+            fifo.write_data[0:8] .eq(rx.payload),
+            fifo.write_data[8]   .eq(rx_last),
+            fifo.write_data[9]   .eq(rx_first),
+            fifo.write_en        .eq(okay_to_receive & rx.next & rx.valid),
+
+            # We'll keep data if our packet finishes with a valid CRC; and discard it otherwise.
+            fifo.write_commit    .eq(targeting_endpoint & boundary_detector.complete_out),
+            fifo.write_discard   .eq(targeting_endpoint & boundary_detector.invalid_out),
+
+            # Our stream data always comes directly out of the FIFO; and is valid
+            # henever our FIFO actually has data for us to read.
+            stream.valid      .eq(~fifo.empty),
+            stream.payload    .eq(fifo.read_data[0:8]),
+
+            # Our `last` bit comes directly from the FIFO; and we know a `first` bit immediately
+            # follows a `last` one.
+            stream.last       .eq(fifo.read_data[8]),
+            stream.first      .eq(fifo.read_data[9]),
+
+            # Move to the next byte in the FIFO whenever our stream is advaced.
+            fifo.read_en      .eq(stream.ready),
+            fifo.read_commit  .eq(1)
+        ]
+
+
+
+        # Debug bits
+        m.d.comb += [
+            self.targeting_endpoint.eq(targeting_endpoint),
+            self.rx_first.eq(rx_first),
+            self.rx_next.eq(rx.next),
+            self.rx_valid.eq(rx.valid),
+            self.rx_last.eq(rx_last),
+            self.is_first_byte.eq(is_first_byte),
+        ]
 
         return m

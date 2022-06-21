@@ -1,0 +1,9 @@
+[workspace]
+
+members = [
+    "tedium/tools/tedium-tool",
+]
+
+exclude = [
+    "modem",
+]

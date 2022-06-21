@@ -9,23 +9,20 @@
 import os
 import subprocess
 
-from abc import ABCMeta, abstractmethod
-from nmigen import Signal, Module, ClockDomain, ClockSignal, Elaboratable, Instance, ResetSignal
+from amaranth import Signal, Module, ClockDomain, ClockSignal, Elaboratable, Instance, ResetSignal
 
-from nmigen.build import *
-from nmigen.hdl.rec import Record, DIR_FANIN, DIR_FANOUT, DIR_NONE
-from nmigen.vendor.lattice_ecp5 import *
+from amaranth.build import *
+from amaranth.vendor.lattice_ecp5 import *
 
-from nmigen_boards.resources import *
+#from amaranth.resources import *
 
 from luna.gateware.platform.core import LUNAPlatform
-from luna.gateware.architecture.car import PHYResetController, LunaDomainGenerator
 
 __all__ = ["TediumX8Platform"]
 
 def ULPIResource(*args, data, clk, dir, nxt, stp, rst=None,
 			clk_dir='i', rst_invert=False, attrs=None, conn=None):
-	# NOTE: Borrowed from nmigen-boards, but with "clk" subsignal Clock(60e6) qualifier to enable timing closure for the USB clock.
+	# NOTE: Borrowed from amaranth-boards, but with "clk" subsignal Clock(60e6) qualifier to enable timing closure for the USB clock.
 
 	assert clk_dir in ('i', 'o',)
 
@@ -42,7 +39,7 @@ def ULPIResource(*args, data, clk, dir, nxt, stp, rst=None,
 		io.append(attrs)
 	return Resource.family(*args, default_name="usb", ios=io)
 
-def FramerProcessorBusResource(name, addr_sites, data_sites, pclk_site, cs_site, ale_as_site, rd_ds_we_site, wr_rw_site, rdy_dtack_site, int_site, req_sites, ack_sites, ptype0_site, ptype2_site, reset_site):
+def MicroprocessorBusResource(name, addr_sites, data_sites, pclk_site, cs_site, ale_as_site, rd_ds_we_site, wr_rw_site, rdy_dtack_site, int_site, req_sites, ack_sites, ptype0_site, ptype2_site, reset_site):
 	""" Generates a set of resource for the XRT86VX38 TDM LIU/framer microprocessor interface. """
 
 	# PTYPE1 is permanently grounded.
@@ -51,10 +48,10 @@ def FramerProcessorBusResource(name, addr_sites, data_sites, pclk_site, cs_site,
 		Subsignal("addr",   Pins (addr_sites,     dir="o" )),
 		Subsignal("data",   Pins (data_sites,     dir="io")),
 		Subsignal("pclk",   Pins (pclk_site,      dir="o" )),
-		Subsignal("cs",     PinsN(cs_site,        dir="o" )),
+		Subsignal("cs",     PinsN(cs_site,        dir="o" ), Attrs(PULLMODE="UP")),
 		Subsignal("ale",    Pins (ale_as_site,    dir="o" )),
-		Subsignal("rd",     PinsN(rd_ds_we_site,  dir="o" )),
-		Subsignal("wr",     PinsN(wr_rw_site,     dir="o" )),
+		Subsignal("rd",     PinsN(rd_ds_we_site,  dir="o" ), Attrs(PULLMODE="UP")),
+		Subsignal("wr",     PinsN(wr_rw_site,     dir="o" ), Attrs(PULLMODE="UP")),
 		Subsignal("rdy",    PinsN(rdy_dtack_site, dir="i" )),
 		Subsignal("int",    PinsN(int_site,       dir="i" )),
 		Subsignal("req",    PinsN(req_sites,      dir="i" )),
@@ -113,80 +110,158 @@ class TediumECP5DomainGenerator(Elaboratable):
 		feedback = Signal()
 		locked   = Signal()
 
-		m.submodules.pll = Instance("EHXPLLL",
-			i_CLKI             = clk_16m384,
+		pll_config = 'slow'
 
-			o_CLKOP            = ClockSignal("fast"),
-			o_CLKOS            = ClockSignal("sync"),
+		if pll_config == 'fast':
+			m.submodules.pll = Instance("EHXPLLL",
+				i_CLKI             = clk_16m384,
 
-			# Status.
-			o_LOCK             = locked,
+				o_CLKOP            = ClockSignal("fast"),
+				o_CLKOS            = ClockSignal("sync"),
 
-			i_CLKFB            = ClockSignal("fast"),
+				# Status.
+				o_LOCK             = locked,
 
-			# Control signals.
-			i_RST              = 0,
-			i_STDBY            = 0,
-			# i_CLKINTFB         = 0,
-			i_PHASESEL0        = 0,
-			i_PHASESEL1        = 0,
-			i_PHASEDIR         = 1,
-			i_PHASESTEP        = 1,
-			i_PHASELOADREG     = 1,
-			i_PLLWAKESYNC      = 0,
-			i_ENCLKOP          = 0,
-			i_ENCLKOS          = 0,
-			i_ENCLKOS2         = 0,
-			i_ENCLKOS3         = 0,
+				i_CLKFB            = ClockSignal("fast"),
 
-			p_PLLRST_ENA       = "DISABLED",
-			p_INTFB_WAKE       = "DISABLED",
-			p_STDBY_ENABLE     = "DISABLED",
-			p_DPHASE_SOURCE    = "DISABLED",
+				# Control signals.
+				i_RST              = 0,
+				i_STDBY            = 0,
+				# i_CLKINTFB         = 0,
+				i_PHASESEL0        = 0,
+				i_PHASESEL1        = 0,
+				i_PHASEDIR         = 1,
+				i_PHASESTEP        = 1,
+				i_PHASELOADREG     = 1,
+				i_PLLWAKESYNC      = 0,
+				i_ENCLKOP          = 0,
+				i_ENCLKOS          = 0,
+				i_ENCLKOS2         = 0,
+				i_ENCLKOS3         = 0,
 
-			p_CLKI_DIV         = 1,
+				p_PLLRST_ENA       = "DISABLED",
+				p_INTFB_WAKE       = "DISABLED",
+				p_STDBY_ENABLE     = "DISABLED",
+				p_DPHASE_SOURCE    = "DISABLED",
 
-			p_CLKOP_ENABLE     = "ENABLED",
-			p_CLKOP_DIV        = 4,
-			p_CLKOP_CPHASE     = 1,
-			p_CLKOP_FPHASE     = 0,
-			# p_CLKOP_TRIM_DELAY = 0,
-			# p_CLKOP_TRIM_POL   = "FALLING",
+				p_CLKI_DIV         = 1,
 
-			p_CLKOS_ENABLE     = "ENABLED",
-			p_CLKOS_DIV        = 8,
-			p_CLKOS_CPHASE     = 1,
-			p_CLKOS_FPHASE     = 0,
-			# p_CLKOS_TRIM_DELAY = 0,
-			# p_CLKOS_TRIM_POL   = "FALLING",
+				p_CLKOP_ENABLE     = "ENABLED",
+				p_CLKOP_DIV        = 4,
+				p_CLKOP_CPHASE     = 1,
+				p_CLKOP_FPHASE     = 0,
+				# p_CLKOP_TRIM_DELAY = 0,
+				# p_CLKOP_TRIM_POL   = "FALLING",
 
-			p_FEEDBK_PATH      = "CLKOP",
-			p_CLKFB_DIV        = 12,
+				p_CLKOS_ENABLE     = "ENABLED",
+				p_CLKOS_DIV        = 8,
+				p_CLKOS_CPHASE     = 1,
+				p_CLKOS_FPHASE     = 0,
+				# p_CLKOS_TRIM_DELAY = 0,
+				# p_CLKOS_TRIM_POL   = "FALLING",
 
-			p_CLKOS3_FPHASE    = 0,
-			p_CLKOS3_CPHASE    = 0,
-			p_CLKOS2_FPHASE    = 0,
-			p_CLKOS2_CPHASE    = 0,
-			p_PLL_LOCK_MODE    = 0,
-			p_OUTDIVIDER_MUXD  = "DIVD",
-			p_CLKOS3_ENABLE    = "DISABLED",
-			p_OUTDIVIDER_MUXC  = "DIVC",
-			p_CLKOS2_ENABLE    = "DISABLED",
-			p_OUTDIVIDER_MUXB  = "DIVB",
-			p_OUTDIVIDER_MUXA  = "DIVA",
-			p_CLKOS3_DIV       = 1,
-			p_CLKOS2_DIV       = 1,
+				p_FEEDBK_PATH      = "CLKOP",
+				p_CLKFB_DIV        = 12,
 
-			# Synthesis attributes.
-			a_FREQUENCY_PIN_CLKI="16.384000",
-			a_FREQUENCY_PIN_CLKOP="196.608000",
-			a_FREQUENCY_PIN_CLKOS="98.304000",
+				p_CLKOS3_FPHASE    = 0,
+				p_CLKOS3_CPHASE    = 0,
+				p_CLKOS2_FPHASE    = 0,
+				p_CLKOS2_CPHASE    = 0,
+				p_PLL_LOCK_MODE    = 0,
+				p_OUTDIVIDER_MUXD  = "DIVD",
+				p_CLKOS3_ENABLE    = "DISABLED",
+				p_OUTDIVIDER_MUXC  = "DIVC",
+				p_CLKOS2_ENABLE    = "DISABLED",
+				p_OUTDIVIDER_MUXB  = "DIVB",
+				p_OUTDIVIDER_MUXA  = "DIVA",
+				p_CLKOS3_DIV       = 1,
+				p_CLKOS2_DIV       = 1,
 
-			a_ICP_CURRENT="12",
-			a_LPF_RESISTOR="8",
-			a_MFG_ENABLE_FILTEROPAMP="1",
-			a_MFG_GMCREF_SEL="2",
-		)
+				# Synthesis attributes.
+				a_FREQUENCY_PIN_CLKI="16.384000",
+				a_FREQUENCY_PIN_CLKOP="196.608000",
+				a_FREQUENCY_PIN_CLKOS="98.304000",
+
+				a_ICP_CURRENT="12",
+				a_LPF_RESISTOR="8",
+				a_MFG_ENABLE_FILTEROPAMP="1",
+				a_MFG_GMCREF_SEL="2",
+			)
+		else:
+			m.submodules.pll = Instance("EHXPLLL",
+				i_CLKI             = clk_16m384,	# TODO: Explicitly put through a buffer?
+
+				o_CLKOP            = ClockSignal("fast"),
+				o_CLKOS            = ClockSignal("sync"),
+
+				# Status.
+				o_LOCK             = locked,
+
+				i_CLKFB            = feedback,
+				o_CLKINTFB         = feedback,
+
+				# Control signals.
+				i_RST              = 0,
+				i_STDBY            = 0,
+				i_PHASESEL0        = 0,
+				i_PHASESEL1        = 0,
+				i_PHASEDIR         = 0,
+				i_PHASESTEP        = 0,
+				i_PHASELOADREG     = 0,
+				i_PLLWAKESYNC      = 0,
+				i_ENCLKOP          = 0,
+				i_ENCLKOS          = 0,
+				i_ENCLKOS2         = 0,
+				i_ENCLKOS3         = 0,
+
+				p_PLLRST_ENA       = "DISABLED",
+				p_INTFB_WAKE       = "DISABLED",
+				p_STDBY_ENABLE     = "DISABLED",
+				p_DPHASE_SOURCE    = "DISABLED",
+
+				p_CLKI_DIV         = 1,
+
+				p_CLKOP_ENABLE     = "ENABLED",
+				p_CLKOP_DIV        = 7,
+				p_CLKOP_FPHASE     = 0,
+				p_CLKOP_CPHASE     = 6,
+				p_CLKOP_TRIM_DELAY = 0,
+				p_CLKOP_TRIM_POL   = "FALLING",
+
+				p_CLKOS_ENABLE     = "ENABLED",
+				p_CLKOS_DIV        = 14,
+				p_CLKOS_FPHASE     = 0,
+				p_CLKOS_CPHASE     = 13,
+				p_CLKOS_TRIM_DELAY = 0,
+				p_CLKOS_TRIM_POL   = "FALLING",
+
+				p_FEEDBK_PATH      = "INT_OP",
+				p_CLKFB_DIV        = 6,
+
+				p_CLKOS3_FPHASE    = 0,
+				p_CLKOS3_CPHASE    = 0,
+				p_CLKOS2_FPHASE    = 0,
+				p_CLKOS2_CPHASE    = 0,
+				p_PLL_LOCK_MODE    = 0,
+				p_OUTDIVIDER_MUXD  = "DIVD",
+				p_CLKOS3_ENABLE    = "DISABLED",
+				p_OUTDIVIDER_MUXC  = "DIVC",
+				p_CLKOS2_ENABLE    = "DISABLED",
+				p_OUTDIVIDER_MUXB  = "DIVB",
+				p_OUTDIVIDER_MUXA  = "DIVA",
+				p_CLKOS3_DIV       = 1,
+				p_CLKOS2_DIV       = 1,
+
+				# # Synthesis attributes.
+				a_FREQUENCY_PIN_CLKI="16.384000",
+				a_FREQUENCY_PIN_CLKOP="98.304000",
+				a_FREQUENCY_PIN_CLKOS="49.152000",
+
+				a_ICP_CURRENT="6",
+				a_LPF_RESISTOR="16",
+				# a_MFG_ENABLE_FILTEROPAMP="1",
+				# a_MFG_GMCREF_SEL="2",
+			)
 
 		m.d.comb += [
 			ClockSignal("clkref" ).eq(clk_16m384),
@@ -407,7 +482,7 @@ class TediumX8Platform(LatticeECP5Platform, LUNAPlatform):
 			attrs=Attrs(IO_TYPE="LVCMOS33", SLEWRATE="FAST"),
 		),
 
-		FramerProcessorBusResource("framer_bus",
+		MicroprocessorBusResource("microprocessor_bus",
 			addr_sites="E9 C9 B9 C5 D9 A9 E10 B10 C10 C11 D13 A11 A12 B13 H17",
 			data_sites="E8 D10 E11 B11 C12 E14 F18 C15",
 			pclk_site="A7",
@@ -433,12 +508,14 @@ class TediumX8Platform(LatticeECP5Platform, LUNAPlatform):
 		return {
 			**super().file_templates,
 			"{{name}}-openocd.cfg": r"""
-			interface ftdi
-			ftdi_vid_pid 0x0403 0x6010
-			ftdi_channel 0
-			ftdi_layout_init 0xfff8 0xfffb
+			adapter driver ftdi
+			ftdi vid_pid 0x0403 0x6010
+			ftdi channel 0
+			ftdi layout_init 0xfff8 0xfffb
+			ftdi tdo_sample_edge falling
 			reset_config none
-			adapter_khz 25000
+			adapter speed 25000
+			transport select jtag
 			jtag newtap ecp5 tap -irlen 8 -expected-id 0x41113043
 			"""
 		}

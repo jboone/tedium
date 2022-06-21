@@ -6,11 +6,11 @@
 # Copyright (C) 2020 Jared Boone <jared@sharebrained.com>
 # SPDX-License-Identifier: BSD-3-Clause
 
-from nmigen import Elaboratable, Record, Signal, ResetSignal, Module
+from amaranth import Elaboratable, Record, Signal, Module
 
-from nmigen.hdl.rec import DIR_FANIN, DIR_FANOUT
+from amaranth.hdl.rec import DIR_FANIN, DIR_FANOUT
 
-class FramerBus(Record):
+class MicroprocessorBus(Record):
 	""" Record representing an XRT86VX38 TDM framer/LIU microprocessor interface. """
 
 	LAYOUT = [
@@ -37,11 +37,13 @@ class FramerBus(Record):
 	def __init__(self):
 		super().__init__(self.LAYOUT)
 
-class FramerInterface(Elaboratable):
+class MicroprocessorInterface(Elaboratable):
 	""" XRT86VX38 Framer/LIU processor bus
+
+    NOTE: Be sure to DomainRename "sync" to "usb"!
 	"""
-	def __init__(self, *, bus):
-		self.bus     = bus #FramerBus()
+	def __init__(self, *, bus: MicroprocessorBus):
+		self.bus     = bus
 
 		self.address = Signal(15)
 		self.data_wr = Signal(8)
@@ -63,13 +65,13 @@ class FramerInterface(Elaboratable):
 		m.d.comb += [
 			self.bus.pclk.eq(0),	# PCLK is unused in Intel uP mode.
 			self.bus.ale.eq(1),		# Use ALE=1 Intel uP interface variant, which simplifies state management and timing.
-			self.bus.ack.eq(0),		# TODO: Implement DMA.
+			self.bus.ack.eq(0b00),	# TODO: Implement DMA.
 			self.bus.ptype0.eq(0),	# PTYPE[2,0]: Configure interface for Intel uP interface mode.
 			self.bus.ptype2.eq(0),	# PTYPE1 is wired to ground/low/0.
 			self.bus.reset.eq(0),	# TODO: Wire to internal reset.
 		]
 
-		with m.FSM() as fsm:
+		with m.FSM(domain="sync", reset="IDLE") as fsm:
 			with m.State("IDLE"):
 				with m.If(self.start):
 					m.d.sync += [
@@ -172,9 +174,9 @@ from luna.gateware.test.utils import LunaGatewareTestCase, sync_test_case
 
 class FramerBusTest(LunaGatewareTestCase):
 
-	FRAGMENT_UNDER_TEST = FramerInterface
+	FRAGMENT_UNDER_TEST = MicroprocessorInterface
 	FRAGMENT_ARGUMENTS = {
-		'bus': FramerBus(),
+		'bus': MicroprocessorBus(),
 	}
 
 	SYNC_CLOCK_FREQUENCY = 100e6

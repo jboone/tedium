@@ -1,0 +1,2 @@
+ATTR{idVendor}=="0403", ATTR{idProduct}=="6010", SYMLINK+="tediumjtag", MODE="660", GROUP="plugdev"
+ATTR{idVendor}=="16d0", ATTR{idProduct}=="0f3b", SYMLINK+="tediumtarget", MODE="660", GROUP="plugdev"
