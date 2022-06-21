@@ -9,9 +9,8 @@ license = "BSD"
 python = "^3.7"
 pyusb = "^1.1.1"
 libusb1 = "^1.9.2"
-amaranth = {path = "amaranth", develop=true}
-luna = {path = "luna", develop=true}
-#luna = {git = "https://github.com/greatscottgadgets/luna.git", branch = "main"}
+amaranth = {git = "https://github.com/amaranth-lang/amaranth.git", rev = "main"}
+luna = {git = "https://github.com/jboone/luna.git"}
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
