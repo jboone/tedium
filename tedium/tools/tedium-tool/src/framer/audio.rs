@@ -781,7 +781,7 @@ pub fn pump_loopback() -> Result<(), PumpError> {
             device_handle.clone(),
             LIBUSB_ENDPOINT_IN | EndpointNumber::FrameStream as u8,
             NUM_ISO_PACKETS,
-            512,    // Two transfers (audio frames) per USB microframe.
+            512,
             0,
             Box::new(CallbackInWrapper::new(handler.clone())),
         );
@@ -1023,7 +1023,7 @@ impl CallbackIn for LoopbackFrameHandler {
 }
 
 impl CallbackOut for LoopbackFrameHandler {
-    fn callback_out(&mut self, transfer: *mut ffi::libusb_transfer) {        
+    fn callback_out(&mut self, transfer: *mut ffi::libusb_transfer) {
         let num_iso_packets = unsafe { (*transfer).num_iso_packets } as usize;
 
         self.sender.send(LoopbackMessage::Out(num_iso_packets)).unwrap();
