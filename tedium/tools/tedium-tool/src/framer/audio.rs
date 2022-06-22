@@ -829,8 +829,8 @@ pub fn pump_loopback() -> Result<(), PumpError> {
                         tx_fifo_level_range = r;
                     }
                 },
-                DebugMessage::FramerStatistics(s) => {
-                    eprint!("\n{s:?}");
+                DebugMessage::FramerStatistics(p, c) => {
+                    eprint!("\n{p:?} {c:?}");
                 },
             }
         }
@@ -898,7 +898,7 @@ impl<T: CallbackOut> IsochronousTransferHandler for CallbackOutWrapper<T> {
 #[derive(Copy, Clone, Debug)]
 enum DebugMessage {
     TxFIFORange((u8, u8)),
-    FramerStatistics(FramerStatistics),
+    FramerStatistics(FramerPeriodicStatistics, FramerCumulativeStatistics),
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -1023,37 +1023,46 @@ const RX_FIFO_DEPTH: usize = 8;
 const TX_FIFO_DEPTH: usize = 32;
 
 #[derive(Copy, Clone, Debug)]
-struct FramerStatistics {
-    // TODO: Refactor, some of these are measurements over the period of `frame_count`,
-    // others are cumulative.
+struct FramerPeriodicStatistics {
     rx_fifo_level_histogram: [u32; RX_FIFO_DEPTH],
     tx_fifo_level_histogram: [u32; TX_FIFO_DEPTH],
+    frame_count: u32,
+}
+
+impl Default for FramerPeriodicStatistics {
+    fn default() -> Self {
+        Self {
+            rx_fifo_level_histogram: [0; RX_FIFO_DEPTH],
+            tx_fifo_level_histogram: [0; TX_FIFO_DEPTH],
+            frame_count: 0,
+        }
+    }
+}
+#[derive(Copy, Clone, Debug)]
+struct FramerCumulativeStatistics {
     rx_fifo_underflow_count: u16,
     tx_fifo_overflow_count: u16,
     sof_discontinuity_count: u32,
     frame_discontinuity_count: u32,
     ringbuf_full_drop_count: u32,
-    frame_count: u32,
 }
 
-impl Default for FramerStatistics {
+impl Default for FramerCumulativeStatistics {
     fn default() -> Self {
         Self {
-            rx_fifo_level_histogram: [0; RX_FIFO_DEPTH],
-            tx_fifo_level_histogram: [0; TX_FIFO_DEPTH],
             rx_fifo_underflow_count: 0,
             tx_fifo_overflow_count: 0,
             sof_discontinuity_count: 0,
             frame_discontinuity_count: 0,
             ringbuf_full_drop_count: 0,
-            frame_count: 0,
         }
     }
 }
 
 struct RxPacketProcessor {
     frames_in: Producer<InternalFrame>,
-    framer_statistics: FramerStatistics,
+    framer_periodic_statistics: FramerPeriodicStatistics,
+    framer_cumulative_statistics: FramerCumulativeStatistics,
     sof_count_next: u32,
     frame_count_next: u32,
     tx_fifo_level_min: u8,
@@ -1065,7 +1074,8 @@ impl RxPacketProcessor {
     fn new(frames_in: Producer<InternalFrame>, debug_sender: Sender<DebugMessage>) -> Self {
         Self {
             frames_in,
-            framer_statistics: FramerStatistics::default(),
+            framer_periodic_statistics: FramerPeriodicStatistics::default(),
+            framer_cumulative_statistics: FramerCumulativeStatistics::default(),
             sof_count_next: 0,
             frame_count_next: 0,
             tx_fifo_level_min: u8::MAX,
@@ -1084,14 +1094,14 @@ impl RxPacketProcessor {
         // Check that USB start-of-frame count is sequential. If frames were skipped
         // or repeated, make a note of it.
         if usb_report.sof_count != self.sof_count_next {
-            self.framer_statistics.sof_discontinuity_count += 1;
+            self.framer_cumulative_statistics.sof_discontinuity_count += 1;
         }
         self.sof_count_next = usb_report.sof_count.wrapping_add(1);
 
-        self.framer_statistics.rx_fifo_level_histogram[usb_report.fifo_rx_level as usize] += 1;
-        self.framer_statistics.tx_fifo_level_histogram[usb_report.fifo_tx_level as usize] += 1;
-        self.framer_statistics.rx_fifo_underflow_count = usb_report.fifo_rx_underflow_count;
-        self.framer_statistics.tx_fifo_overflow_count = usb_report.fifo_tx_overflow_count;
+        self.framer_periodic_statistics.rx_fifo_level_histogram[usb_report.fifo_rx_level as usize] += 1;
+        self.framer_periodic_statistics.tx_fifo_level_histogram[usb_report.fifo_tx_level as usize] += 1;
+        self.framer_cumulative_statistics.rx_fifo_underflow_count = usb_report.fifo_rx_underflow_count;
+        self.framer_cumulative_statistics.tx_fifo_overflow_count = usb_report.fifo_tx_overflow_count;
         
         if usb_report.fifo_tx_level < self.tx_fifo_level_min {
             self.tx_fifo_level_min = usb_report.fifo_tx_level;
@@ -1101,16 +1111,16 @@ impl RxPacketProcessor {
         }
 
         for frame_in in packet.frames() {
-            self.framer_statistics.frame_count += 1;
-            if self.framer_statistics.frame_count >= 8000 {
-                self.debug_sender.send(DebugMessage::FramerStatistics(self.framer_statistics)).unwrap();
-                self.framer_statistics = FramerStatistics::default();
+            self.framer_periodic_statistics.frame_count += 1;
+            if self.framer_periodic_statistics.frame_count >= 8000 {
+                self.debug_sender.send(DebugMessage::FramerStatistics(self.framer_periodic_statistics, self.framer_cumulative_statistics)).unwrap();
+                self.framer_periodic_statistics = FramerPeriodicStatistics::default();
             }
     
             // Check that frame count is sequential. If frames were skipped
             // or repeated, make a note of it.
             if frame_in.report.frame_count != self.frame_count_next {
-                self.framer_statistics.frame_discontinuity_count += 1;
+                self.framer_cumulative_statistics.frame_discontinuity_count += 1;
             }
             self.frame_count_next = frame_in.report.frame_count.wrapping_add(1);
 
@@ -1119,7 +1129,7 @@ impl RxPacketProcessor {
                 frame_count: frame_in.report.frame_count,
             };
             if let Err(e) = self.frames_in.push(frame) {
-                self.framer_statistics.ringbuf_full_drop_count += 1;
+                self.framer_cumulative_statistics.ringbuf_full_drop_count += 1;
             }
         }
     }
