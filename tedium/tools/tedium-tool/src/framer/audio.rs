@@ -385,61 +385,65 @@ pub fn pump_loopback() -> Result<(), PumpError> {
         transfers_out.push(transfer_out);
     }
 
-    thread::spawn(move || {
-        let instant_start = Instant::now();
-        let mut tx_fifo_level_range = (0, 0);
+    thread::Builder::new()
+        .name("debug".into())
+        .spawn(move || {
+            let instant_start = Instant::now();
+            let mut tx_fifo_level_range = (0, 0);
 
-        for message in debug_receiver {
-            match message {
-                DebugMessage::TxFIFORange(r) => {
-                    if r != tx_fifo_level_range {
-                        let elapsed = instant_start.elapsed();
+            for message in debug_receiver {
+                match message {
+                    DebugMessage::TxFIFORange(r) => {
+                        if r != tx_fifo_level_range {
+                            let elapsed = instant_start.elapsed();
 
-                        let mut range_str = ['\u{2500}'; 32];
-                        range_str[r.0 as usize] = '\u{2524}';
-                        range_str[r.1 as usize] = '\u{251c}';
-                        for i in (r.0 as usize)+1..(r.1 as usize) {
-                            range_str[i] = ' ';
+                            let mut range_str = ['\u{2500}'; 32];
+                            range_str[r.0 as usize] = '\u{2524}';
+                            range_str[r.1 as usize] = '\u{251c}';
+                            for i in (r.0 as usize)+1..(r.1 as usize) {
+                                range_str[i] = ' ';
+                            }
+                            let range_str = range_str.iter().cloned().collect::<String>();
+
+                            eprint!("\n{:6}.{:06}: {} ", elapsed.as_secs(), elapsed.subsec_micros(), range_str);
+                            tx_fifo_level_range = r;
                         }
-                        let range_str = range_str.iter().cloned().collect::<String>();
-
-                        eprint!("\n{:6}.{:06}: {} ", elapsed.as_secs(), elapsed.subsec_micros(), range_str);
-                        tx_fifo_level_range = r;
-                    }
-                },
-                DebugMessage::FramerStatistics(p, c) => {
-                    eprint!("\n{p:?} {c:?}");
-                },
+                    },
+                    DebugMessage::FramerStatistics(p, c) => {
+                        eprint!("\n{p:?} {c:?}");
+                    },
+                }
             }
-        }
-    });
+        }).unwrap();
 
-    thread::spawn(move || {
-        // Quick demo of sending changes to audio processor patching.
-        let address = TimeslotAddress::new(0, 0);
+    thread::Builder::new()
+        .name("repatch".into())
+        .spawn(move || {
+            // Quick demo of sending changes to audio processor patching.
+            let address = TimeslotAddress::new(0, 0);
 
-        loop {
-            // Idle / on-hook.
-            patch_sender.send(ProcessorMessage::Patch(address, Patch::Idle)).unwrap();
-            thread::sleep(Duration::from_millis(1000));
-
-            // Dial tone
-            patch_sender.send(ProcessorMessage::Patch(address, Patch::Tone(ToneSource::DialTonePrecise))).unwrap();
-            thread::sleep(Duration::from_millis(1000));
-
-            // Ring / silence cadence.
-            for _ in 0..3 {
+            loop {
+                // Idle / on-hook.
                 patch_sender.send(ProcessorMessage::Patch(address, Patch::Idle)).unwrap();
-                thread::sleep(Duration::from_millis(4000));
-                patch_sender.send(ProcessorMessage::Patch(address, Patch::Tone(ToneSource::Ringback))).unwrap();
-                thread::sleep(Duration::from_millis(2000));
-            }
+                thread::sleep(Duration::from_millis(1000));
 
-            // Connect to ourselves.
-            patch_sender.send(ProcessorMessage::Patch(address, Patch::Input(address))).unwrap();
-            thread::sleep(Duration::from_millis(5000));
-        }
-    });
+                // Dial tone
+                patch_sender.send(ProcessorMessage::Patch(address, Patch::Tone(ToneSource::DialTonePrecise))).unwrap();
+                thread::sleep(Duration::from_millis(1000));
+
+                // Ring / silence cadence.
+                for _ in 0..3 {
+                    patch_sender.send(ProcessorMessage::Patch(address, Patch::Idle)).unwrap();
+                    thread::sleep(Duration::from_millis(4000));
+                    patch_sender.send(ProcessorMessage::Patch(address, Patch::Tone(ToneSource::Ringback))).unwrap();
+                    thread::sleep(Duration::from_millis(2000));
+                }
+
+                // Connect to ourselves.
+                patch_sender.send(ProcessorMessage::Patch(address, Patch::Input(address))).unwrap();
+                thread::sleep(Duration::from_millis(5000));
+            }
+        }).unwrap();
 
     promote_current_thread_to_real_time(8, 8000).unwrap();
 

@@ -385,14 +385,16 @@ fn monitor(context: &rusb::Context, device: &Device) -> Result<()> {
     // let handle = channel.device().handle();
 
     let (sender, receiver) = unbounded();
-    thread::spawn(move || {
-        if let Err(e) = AsyncThing::run(&mut context, sender) {
-        // if let Err(e) = AsyncThing::run(&handle, sender) {
-            eprintln!("error: async_thing: {:?}", e);
-        } else {
-            println!("async_thing done");
-        }
-    });
+    thread::Builder::new()
+        .name("async-thing".into())
+        .spawn(move || {
+            if let Err(e) = AsyncThing::run(&mut context, sender) {
+            // if let Err(e) = AsyncThing::run(&handle, sender) {
+                eprintln!("error: async_thing: {:?}", e);
+            } else {
+                println!("async_thing done");
+            }
+        }).unwrap();
 
 
     println!("entering message loop");
