@@ -184,7 +184,7 @@ impl Default for Patching {
 
         Self {
             map: [
-                [Idle, Idle, Idle, Idle, Idle, Idle, Idle, Idle,],  // Timeslot 00
+                [Tone(ToneSource::DialTonePrecise), Idle, Idle, Idle, Idle, Idle, Idle, Idle,],  // Timeslot 00
                 [Idle, Idle, Idle, Idle, Idle, Idle, Idle, Idle,],
                 [Idle, Idle, Idle, Idle, Idle, Idle, Idle, Idle,],
                 [Idle, Idle, Idle, Idle, Idle, Idle, Idle, Idle,],
@@ -228,7 +228,7 @@ impl AudioFrameOutHandler {
         tone_plant.insert(ToneSource::Ringback, Box::new(DualToneGenerator::new(440.0, 480.0)));
 
         let mut detectors: HashMap<TimeslotAddress, Box<dyn Detector>> = HashMap::new();
-        detectors.insert(TimeslotAddress::new(1, 0), Box::new(dtmf::Detector::new()));
+        detectors.insert(TimeslotAddress::new(0, 0), Box::new(dtmf::Detector::new()));
 
         Self {
             patching: Patching::default(),
@@ -478,6 +478,7 @@ impl Default for Frame {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 struct InternalFrame {
     frame: Frame,
     frame_count: u32,
@@ -485,18 +486,25 @@ struct InternalFrame {
 
 struct LoopbackFrameHandler {
     rx_packet_processor: RxPacketProcessor,
-    frames_out: Consumer<InternalFrame>,
+    unprocessed_frames_consumer: Consumer<InternalFrame>,
+    processed_frames_producer: Producer<InternalFrame>,
+    processed_frames_consumer: Consumer<InternalFrame>,
+    processor: AudioFrameOutHandler,
     debug_sender: Sender<DebugMessage>,
 }
 
 impl LoopbackFrameHandler {
     fn new(debug_sender: Sender<DebugMessage>) -> Self {
         // 40 frames == 5 milliseconds.
-        let (frames_in, frames_out) = RingBuffer::new(40).split();
+        let (unprocessed_frames_producer, unprocessed_frames_consumer) = RingBuffer::new(40).split();
+        let (processed_frames_producer, processed_frames_consumer) = RingBuffer::new(40).split();
 
         Self {
-            rx_packet_processor: RxPacketProcessor::new(frames_in, debug_sender.clone()),
-            frames_out,
+            rx_packet_processor: RxPacketProcessor::new(unprocessed_frames_producer, debug_sender.clone()),
+            unprocessed_frames_consumer,
+            processed_frames_producer,
+            processed_frames_consumer,
+            processor: AudioFrameOutHandler::new(),
             debug_sender,
         }
     }
@@ -632,7 +640,7 @@ impl Default for FramerCumulativeStatistics {
 }
 
 struct RxPacketProcessor {
-    frames_in: Producer<InternalFrame>,
+    unprocessed_frames_producer: Producer<InternalFrame>,
     framer_periodic_statistics: FramerPeriodicStatistics,
     framer_cumulative_statistics: FramerCumulativeStatistics,
     sof_count_next: u32,
@@ -645,7 +653,7 @@ struct RxPacketProcessor {
 impl RxPacketProcessor {
     fn new(frames_in: Producer<InternalFrame>, debug_sender: Sender<DebugMessage>) -> Self {
         Self {
-            frames_in,
+            unprocessed_frames_producer: frames_in,
             framer_periodic_statistics: FramerPeriodicStatistics::default(),
             framer_cumulative_statistics: FramerCumulativeStatistics::default(),
             sof_count_next: 0,
@@ -700,7 +708,7 @@ impl RxPacketProcessor {
                 frame: frame_in.frame,
                 frame_count: frame_in.report.frame_count,
             };
-            if let Err(e) = self.frames_in.push(frame) {
+            if let Err(e) = self.unprocessed_frames_producer.push(frame) {
                 self.framer_cumulative_statistics.ringbuf_full_drop_count += 1;
             }
         }
@@ -750,6 +758,14 @@ impl LoopbackFrameHandler {
         self.debug_sender.send(DebugMessage::TxFIFORange(
             (self.rx_packet_processor.tx_fifo_level_min, self.rx_packet_processor.tx_fifo_level_max)
         )).unwrap();
+
+        while let Some(unprocessed_frame) = self.unprocessed_frames_consumer.pop() {
+            let processed_frame = self.processor.process_frame(&unprocessed_frame.frame);
+            self.processed_frames_producer.push(InternalFrame {
+                frame: processed_frame,
+                frame_count: unprocessed_frame.frame_count,
+            }).unwrap();
+        }
     }
 
     fn handle_out(&mut self, transfer: *mut ffi::libusb_transfer) {
@@ -760,13 +776,13 @@ impl LoopbackFrameHandler {
             if self.rx_packet_processor.tx_fifo_level_min > 12 {
                 // Simple way to draw down the TX FIFO level if it's too high.
                 // We're dropping a frame here...
-                let _ = self.frames_out.pop();
+                let _ = self.processed_frames_consumer.pop();
                 eprint!("D");
             }
         }
 
         for i in 0..num_iso_packets {
-            let available_frames = self.frames_out.len();
+            let available_frames = self.processed_frames_consumer.len();
             let frame_count = if available_frames >= 2 {
                 2
             } else {
@@ -789,7 +805,7 @@ impl LoopbackFrameHandler {
             for frame in buffer.chunks_exact_mut(size_of::<TxFrame>()) {
                 let frame = bytemuck::from_bytes_mut::<TxFrame>(frame);
 
-                if let Some(frame_out) = self.frames_out.pop() {
+                if let Some(frame_out) = self.processed_frames_consumer.pop() {
                     frame.frame = frame_out.frame;
                     frame.report.frame_count = frame_out.frame_count;
                 } else {
