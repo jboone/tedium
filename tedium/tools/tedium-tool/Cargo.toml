@@ -17,13 +17,6 @@ libc = "0.2"
 num-complex = "0.4"
 
 bytemuck = "1.9"
-# pipewire = "0.5"
-# pipewire = { path = "../../../modem/pipewire-rs/pipewire" }
-
-# libspa-sys = "0.5"
-# libspa-sys = { path = "../../../modem/pipewire-rs/libspa-sys" }
-
-# jack = "0.10"
 
 # Sad that modular-bitfield doesn't support MSB-first packing.
 #modular-bitfield = "0.11"
