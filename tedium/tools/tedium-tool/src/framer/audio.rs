@@ -3,7 +3,7 @@ use std::mem::size_of;
 use std::ptr::NonNull;
 use std::slice;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Instant, Duration};
 use std::thread;
 
 use crate::codec::ulaw;
@@ -14,7 +14,7 @@ use crate::generator::dual_tone::DualToneGenerator;
 
 use audio_thread_priority::promote_current_thread_to_real_time;
 use bytemuck::{Pod, Zeroable};
-use crossbeam::channel::{unbounded, Sender};
+use crossbeam::channel::{unbounded, Sender, Receiver};
 use libc::c_uint;
 use ringbuf::{RingBuffer, Consumer, Producer};
 use rusb::constants::LIBUSB_TRANSFER_COMPLETED;
@@ -162,6 +162,7 @@ enum ToneSource {
     Ringback,
 }
 
+#[derive(Copy, Clone, Debug)]
 enum Patch {
     Idle,
     Input(TimeslotAddress),
@@ -175,6 +176,10 @@ struct Patching {
 impl Patching {
     fn timeslot(&self, address: &TimeslotAddress) -> &Patch {
         &self.map[address.timeslot][address.channel]
+    }
+
+    fn timeslot_mut(&mut self, address: &TimeslotAddress) -> &mut Patch {
+        &mut self.map[address.timeslot][address.channel]
     }
 }
 
@@ -213,14 +218,20 @@ impl Default for Patching {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+enum ProcessorMessage {
+    Patch(TimeslotAddress, Patch),
+}
+
 struct AudioProcessor {
     patching: Patching,
     tone_plant: HashMap<ToneSource, Box<dyn ToneGenerator>>,
     detectors: HashMap<TimeslotAddress, Box<dyn Detector>>,
+    message_receiver: Receiver<ProcessorMessage>,
 }
 
 impl AudioProcessor {
-    fn new() -> Self {
+    fn new(message_receiver: Receiver<ProcessorMessage>) -> Self {
         use ToneSource::*;
 
         let mut tone_plant: HashMap<ToneSource, Box<dyn ToneGenerator>> = HashMap::new();
@@ -234,10 +245,23 @@ impl AudioProcessor {
             patching: Patching::default(),
             tone_plant,
             detectors,
+            message_receiver,
+        }
+    }
+
+    fn process_message(&mut self, message: ProcessorMessage) {
+        match message {
+            ProcessorMessage::Patch(address, patch) => {
+                *self.patching.timeslot_mut(&address) = patch;
+            },
         }
     }
 
     fn process_frame(&mut self, frame_in: &Frame) -> Frame {
+        while let Ok(message) = self.message_receiver.try_recv() {
+            self.process_message(message);
+        }
+
         // Update generator outputs.
         for generator in self.tone_plant.values_mut() {
             generator.advance();
@@ -331,8 +355,9 @@ pub fn pump_loopback() -> Result<(), PumpError> {
     let mut transfers_in: Vec<IsochronousTransfer> = Vec::new();
     let mut transfers_out: Vec<IsochronousTransfer> = Vec::new();
 
+    let (patch_sender, patch_receiver) = unbounded();
     let (debug_sender, debug_receiver) = unbounded();
-    let handler = Arc::new(Mutex::new(LoopbackFrameHandler::new(debug_sender)));
+    let handler = Arc::new(Mutex::new(LoopbackFrameHandler::new(patch_receiver, debug_sender)));
 
     for _ in 0..TRANSFERS_COUNT {
         let transfer_in = IsochronousTransfer::new(
@@ -386,6 +411,33 @@ pub fn pump_loopback() -> Result<(), PumpError> {
                     eprint!("\n{p:?} {c:?}");
                 },
             }
+        }
+    });
+
+    thread::spawn(move || {
+        // Quick demo of sending changes to audio processor patching.
+        let address = TimeslotAddress::new(0, 0);
+
+        loop {
+            // Idle / on-hook.
+            patch_sender.send(ProcessorMessage::Patch(address, Patch::Idle)).unwrap();
+            thread::sleep(Duration::from_millis(1000));
+
+            // Dial tone
+            patch_sender.send(ProcessorMessage::Patch(address, Patch::Tone(ToneSource::DialTonePrecise))).unwrap();
+            thread::sleep(Duration::from_millis(1000));
+
+            // Ring / silence cadence.
+            for _ in 0..3 {
+                patch_sender.send(ProcessorMessage::Patch(address, Patch::Idle)).unwrap();
+                thread::sleep(Duration::from_millis(4000));
+                patch_sender.send(ProcessorMessage::Patch(address, Patch::Tone(ToneSource::Ringback))).unwrap();
+                thread::sleep(Duration::from_millis(2000));
+            }
+
+            // Connect to ourselves.
+            patch_sender.send(ProcessorMessage::Patch(address, Patch::Input(address))).unwrap();
+            thread::sleep(Duration::from_millis(5000));
         }
     });
 
@@ -494,7 +546,7 @@ struct LoopbackFrameHandler {
 }
 
 impl LoopbackFrameHandler {
-    fn new(debug_sender: Sender<DebugMessage>) -> Self {
+    fn new(processor_receiver: Receiver<ProcessorMessage>, debug_sender: Sender<DebugMessage>) -> Self {
         // 40 frames == 5 milliseconds.
         let (unprocessed_frames_producer, unprocessed_frames_consumer) = RingBuffer::new(40).split();
         let (processed_frames_producer, processed_frames_consumer) = RingBuffer::new(40).split();
@@ -504,7 +556,7 @@ impl LoopbackFrameHandler {
             unprocessed_frames_consumer,
             processed_frames_producer,
             processed_frames_consumer,
-            processor: AudioProcessor::new(),
+            processor: AudioProcessor::new(processor_receiver),
             debug_sender,
         }
     }
