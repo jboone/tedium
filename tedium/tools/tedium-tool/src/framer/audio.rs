@@ -876,11 +876,8 @@ struct InternalFrame {
 }
 
 struct LoopbackFrameHandler {
-    frames_in: Producer<InternalFrame>,
+    rx_packet_processor: RxPacketProcessor,
     frames_out: Consumer<InternalFrame>,
-    sof_count_next: u32,
-    frame_count_next: u32,
-    tx_fifo_level_min: u8,
 }
 
 impl LoopbackFrameHandler {
@@ -889,11 +886,8 @@ impl LoopbackFrameHandler {
         let (frames_in, frames_out) = RingBuffer::new(40).split();
 
         Self {
-            frames_in,
+            rx_packet_processor: RxPacketProcessor::new(frames_in),
             frames_out,
-            sof_count_next: 0,
-            frame_count_next: 0,
-            tx_fifo_level_min: 0,
         }
     }
 }
@@ -965,8 +959,89 @@ impl CallbackOut for LoopbackFrameHandler {
     }
 }
 
+struct RxPacket<'a> {
+    slice: &'a [u8],
+}
+
+impl<'a> RxPacket<'a> {
+    fn from_slice(slice: &'a [u8]) -> Self {
+        Self {
+            slice,
+        }
+    }
+
+    fn usb_report(&self) -> &RxUSBReport {
+        let (_, usb_report) = self.slice.split_at(self.slice.len() - size_of::<RxUSBReport>());
+        bytemuck::from_bytes::<RxUSBReport>(usb_report)
+    }
+
+    fn frames(&self) -> impl Iterator<Item=&RxFrame> {
+        let (buffer, _) = self.slice.split_at(self.slice.len() - size_of::<RxUSBReport>());
+        buffer.chunks_exact(size_of::<RxFrame>()).map(|b| bytemuck::from_bytes(b))
+    }
+}
+
+struct RxPacketProcessor {
+    frames_in: Producer<InternalFrame>,
+    sof_count_next: u32,
+    frame_count_next: u32,
+    tx_fifo_level_min: u8,
+    tx_fifo_level_max: u8,
+}
+
+impl RxPacketProcessor {
+    fn new(frames_in: Producer<InternalFrame>) -> Self {
+        Self {
+            frames_in,
+            sof_count_next: 0,
+            frame_count_next: 0,
+            tx_fifo_level_min: u8::MAX,
+            tx_fifo_level_max: u8::MIN,
+        }
+    }
+
+    fn reset_tx_fifo_level_stats(&mut self) {
+        self.tx_fifo_level_max = u8::MIN;
+        self.tx_fifo_level_min = u8::MAX;
+    }
+
+    fn process(&mut self, packet: &RxPacket) {
+        let usb_report = packet.usb_report();
+        // Check that USB start-of-frame count is sequential. If frames were skipped
+        // or repeated, make a note of it.
+        if usb_report.sof_count != self.sof_count_next {
+            eprint!("S");
+        }
+        self.sof_count_next = usb_report.sof_count.wrapping_add(1);
+
+        if usb_report.fifo_tx_level < self.tx_fifo_level_min {
+            self.tx_fifo_level_min = usb_report.fifo_tx_level;
+        }
+        if usb_report.fifo_tx_level > self.tx_fifo_level_max {
+            self.tx_fifo_level_max = usb_report.fifo_tx_level;
+        }
+
+        for frame_in in packet.frames() {
+            // Check that frame count is sequential. If frames were skipped
+            // or repeated, make a note of it.
+            if frame_in.report.frame_count != self.frame_count_next {
+                eprint!("F");
+            }
+            self.frame_count_next = frame_in.report.frame_count.wrapping_add(1);
+
+            let frame = InternalFrame {
+                frame: frame_in.frame,
+                frame_count: frame_in.report.frame_count,
+            };
+            if let Err(e) = self.frames_in.push(frame) {
+                eprint!("I");
+            }
+        }
+    }
+}
+
 impl LoopbackFrameHandler {
-    fn handle_in(&mut self, transfer: *mut ffi::libusb_transfer) {
+     fn handle_in(&mut self, transfer: *mut ffi::libusb_transfer) {
         let transfer_status = unsafe { (*transfer).status };
         if transfer_status != LIBUSB_TRANSFER_COMPLETED {
             eprintln!("IN: transfer.status = {transfer_status}");
@@ -974,10 +1049,12 @@ impl LoopbackFrameHandler {
 
         let num_iso_packets = unsafe { (*transfer).num_iso_packets } as usize;
 
-        let mut tx_fifo_level_min = 31;
-        let mut tx_fifo_level_max = 0;
+        self.rx_packet_processor.reset_tx_fifo_level_stats();
 
         for i in 0..num_iso_packets {
+            // TODO: Wise to eliminate all non-essential work here so we can return
+            // the transfer to the USB stack?
+            
             let packet = unsafe { (*transfer).iso_packet_desc.get_unchecked_mut(i) };
 
             if packet.status == 0 {
@@ -986,41 +1063,8 @@ impl LoopbackFrameHandler {
                     slice::from_raw_parts_mut(p, packet.actual_length.try_into().unwrap()) 
                 };
 
-                let (buffer, usb_report) = buffer.split_at(buffer.len() - size_of::<RxUSBReport>());
-                let usb_report = bytemuck::from_bytes::<RxUSBReport>(usb_report);
-
-                // Check that USB start-of-frame count is sequential. If frames were skipped
-                // or repeated, make a note of it.
-                if usb_report.sof_count != self.sof_count_next {
-                    eprint!("S");
-                }
-                self.sof_count_next = usb_report.sof_count.wrapping_add(1);
-
-                if usb_report.fifo_tx_level < tx_fifo_level_min {
-                    tx_fifo_level_min = usb_report.fifo_tx_level;
-                }
-                if usb_report.fifo_tx_level > tx_fifo_level_max {
-                    tx_fifo_level_max = usb_report.fifo_tx_level;
-                }
-
-                for frame_in in buffer.chunks_exact(size_of::<RxFrame>()) {
-                    let frame_in = bytemuck::from_bytes::<RxFrame>(frame_in);
-
-                    // Check that frame count is sequential. If frames were skipped
-                    // or repeated, make a note of it.
-                    if frame_in.report.frame_count != self.frame_count_next {
-                        eprint!("F");
-                    }
-                    self.frame_count_next = frame_in.report.frame_count.wrapping_add(1);
-
-                    let frame = InternalFrame {
-                        frame: frame_in.frame,
-                        frame_count: frame_in.report.frame_count,
-                    };
-                    if let Err(e) = self.frames_in.push(frame) {
-                        eprint!("I");
-                    }
-                }
+                let rx_packet = RxPacket::from_slice(buffer);
+                self.rx_packet_processor.process(&rx_packet);
             }
         }
 
@@ -1033,18 +1077,19 @@ impl LoopbackFrameHandler {
             LIBUSB_SUCCESS => {},
             e => eprintln!("IN: libusb_submit_transfer error: {e}"),
         }
-
-        self.tx_fifo_level_min = tx_fifo_level_min;
     }
 
     fn handle_out(&mut self, transfer: *mut ffi::libusb_transfer) {
         let num_iso_packets = unsafe { (*transfer).num_iso_packets } as usize;
 
-        if self.tx_fifo_level_min > 12 {
-            // Simple way to draw down the TX FIFO level if it's too high.
-            // We're dropping a frame here...
-            let _ = self.frames_out.pop();
-            eprint!("D");
+        if self.rx_packet_processor.tx_fifo_level_min <= self.rx_packet_processor.tx_fifo_level_max {
+            // min/max are valid (not set to MAX/MIN).
+            if self.rx_packet_processor.tx_fifo_level_min > 12 {
+                // Simple way to draw down the TX FIFO level if it's too high.
+                // We're dropping a frame here...
+                let _ = self.frames_out.pop();
+                eprint!("D");
+            }
         }
 
         for i in 0..num_iso_packets {
