@@ -18,14 +18,9 @@ class Descriptors:
 
     class EndpointNumber(IntEnum):
         FrameStream = 1
-        # FrameStreamIn = 1
-        # FrameStreamOut = 2
         Interrupt = 2
 
-    # FRAME_SAMPLE_BYTES = 192
-    # FRAME_REPORT_BYTES = 12
-    # FRAME_BYTES = FRAME_REPORT_BYTES + FRAME_SAMPLE_BYTES
-    FRAME_BYTES_MAX = 512 #(192 + 64) * 2 + 64
+    FRAME_BYTES_MAX = 512
 
     FRAME_STREAM_ADDITIONAL_PACKETS_PER_INTERVAL = 0
     FRAME_STREAM_INTERVAL = 1   # 2^(bInterval-1) microframes = every 1 microframe.
