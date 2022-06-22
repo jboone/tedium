@@ -19,6 +19,7 @@ use audio_thread_priority::promote_current_thread_to_real_time;
 use bytemuck::{Pod, Zeroable, bytes_of};
 use crossbeam::channel::{unbounded, Sender};
 use libc::c_uint;
+use ringbuf::{RingBuffer, Consumer, Producer};
 use rusb::constants::LIBUSB_TRANSFER_COMPLETED;
 use rusb::ffi::{libusb_set_iso_packet_lengths, libusb_get_iso_packet_buffer};
 use rusb::{ffi, UsbContext, DeviceHandle};
@@ -772,9 +773,7 @@ pub fn pump_loopback() -> Result<(), PumpError> {
     let mut transfers_in: Vec<IsochronousTransfer> = Vec::new();
     let mut transfers_out: Vec<IsochronousTransfer> = Vec::new();
 
-    let (log_sender, log_receiver) = unbounded();
-
-    let handler = Arc::new(Mutex::new(LoopbackFrameHandler::new(log_sender)));
+    let handler = Arc::new(Mutex::new(LoopbackFrameHandler::new()));
 
     for _ in 0..8 {
         let transfer_in = IsochronousTransfer::new(
@@ -801,52 +800,6 @@ pub fn pump_loopback() -> Result<(), PumpError> {
         transfer_out.submit();
         transfers_out.push(transfer_out);
     }
-
-    thread::spawn(move || {
-        let mut usb_sof_count_expected = 0;
-        let mut rx_frame_count_expected = 0;
-
-        loop {
-            for message in &log_receiver {
-                match message {
-                    LoopbackMessage::In(m) => {
-                        // eprintln!("IN: {m:?}");
-                        for (status, length) in m {
-                            if status != 0 {
-                                eprintln!("IN: unusual status={status}");
-                            }
-
-                            match length {
-                                11 => { eprint!("-"); },
-                                207 => { },
-                                403 => { eprint!("+"); },
-                                _ => {
-                                    eprintln!("IN: unusual status={status} length={length}");
-                                }
-                            }
-                        }
-                    },
-                    LoopbackMessage::Out(n) => {
-                        eprintln!("OUT: {n}");
-                    },
-                    LoopbackMessage::RxFrameReport(r) => {
-                        // eprintln!("IN: Frame Report: {}", r.frame_count);
-                        if r.frame_count != rx_frame_count_expected {
-                            eprintln!("IN: Frame: {:08x} != {:08x}", r.frame_count, rx_frame_count_expected);
-                        }
-                        rx_frame_count_expected = r.frame_count.wrapping_add(1);
-                    },
-                    LoopbackMessage::RxUSBReport(r) => {
-                        // eprintln!("IN: USB Report: {}", r.sof_count);
-                        if r.sof_count != usb_sof_count_expected {
-                            eprintln!("IN: Frame: {:08x} != {:08x}", r.sof_count, usb_sof_count_expected);
-                        }
-                        usb_sof_count_expected = r.sof_count.wrapping_add(1);
-                    },
-                }
-            }
-        }
-    });
 
     promote_current_thread_to_real_time(8, 8000).unwrap();
 
@@ -907,23 +860,30 @@ impl<T: CallbackOut> IsochronousTransferHandler for CallbackOutWrapper<T> {
     }
 }
 
-enum LoopbackMessage {
-    In([(i32, u32); 8]),
-    Out(usize),
-    RxFrameReport(RxFrameReport),
-    RxUSBReport(RxUSBReport),
+#[derive(Copy, Clone, Debug)]
+struct Frame {
+    timeslot: [[Sample; CHANNELS]; TIMESLOTS_PER_CHANNEL],
+}
+
+struct InternalFrame {
+    frame: Frame,
 }
 
 struct LoopbackFrameHandler {
-    count: u64,
-    sender: Sender<LoopbackMessage>,
+    frames_in: Producer<InternalFrame>,
+    frames_out: Consumer<InternalFrame>,
+    sof_count_next: u32,
+    frame_count_next: u32,
 }
 
 impl LoopbackFrameHandler {
-    fn new(sender: Sender<LoopbackMessage>) -> Self {
+    fn new() -> Self {
+        let (producer, consumer) = RingBuffer::new(40).split();
         Self {
-            count: 0,
-            sender,
+            frames_in: producer,    // 40 frames == 5 milliseconds.
+            frames_out: consumer,
+            sof_count_next: 0,
+            frame_count_next: 0,
         }
     }
 }
@@ -937,7 +897,7 @@ struct RxFrameReport {
 #[derive(Copy, Clone, Debug)]
 #[repr(packed)]
 struct RxFrame {
-    timeslot_data: [[u8; 8]; 24],
+    frame: Frame,
     report: RxFrameReport,
 }
 
@@ -964,6 +924,9 @@ struct TxUSBReport {
     frame_count: u32,
 }
 
+unsafe impl Zeroable for TxUSBReport {}
+unsafe impl Pod for TxUSBReport {}
+
 #[derive(Copy, Clone, Debug)]
 #[repr(packed)]
 struct TxFrameReport {
@@ -974,23 +937,23 @@ struct TxFrameReport {
 #[repr(packed)]
 struct TxFrame {
     report: TxFrameReport,
-    timeslot_data: [[u8; 8]; 24],
+    frame: Frame,
 }
+
+unsafe impl Zeroable for TxFrame {}
+unsafe impl Pod for TxFrame {}
 
 impl CallbackIn for LoopbackFrameHandler {
     fn callback_in(&mut self, transfer: *mut ffi::libusb_transfer) {
         let transfer_status = unsafe { (*transfer).status };
         if transfer_status != LIBUSB_TRANSFER_COMPLETED {
-            eprintln!("IN: transfer.status == {transfer_status}");
+            eprintln!("IN: transfer.status = {transfer_status}");
         }
 
         let num_iso_packets = unsafe { (*transfer).num_iso_packets } as usize;
 
-        let mut v = [(0i32, 0u32); 8];
         for i in 0..num_iso_packets {
             let packet = unsafe { (*transfer).iso_packet_desc.get_unchecked_mut(i) };
-            v[i].0 = packet.status;
-            v[i].1 = packet.actual_length;
 
             if packet.status == 0 {
                 let buffer = unsafe {
@@ -1000,15 +963,33 @@ impl CallbackIn for LoopbackFrameHandler {
 
                 let (buffer, usb_report) = buffer.split_at(buffer.len() - size_of::<RxUSBReport>());
                 let usb_report = bytemuck::from_bytes::<RxUSBReport>(usb_report);
-                self.sender.send(LoopbackMessage::RxUSBReport(*usb_report)).unwrap();
 
-                for frame in buffer.chunks_exact(size_of::<RxFrame>()) {
-                    let frame = bytemuck::from_bytes::<RxFrame>(frame);
-                    self.sender.send(LoopbackMessage::RxFrameReport(frame.report)).unwrap();
+                // Check that USB start-of-frame count is sequential. If frames were skipped
+                // or repeated, make a note of it.
+                if usb_report.sof_count != self.sof_count_next {
+                    eprint!("S");
+                }
+                self.sof_count_next = usb_report.sof_count.wrapping_add(1);
+
+                for frame_in in buffer.chunks_exact(size_of::<RxFrame>()) {
+                    let frame_in = bytemuck::from_bytes::<RxFrame>(frame_in);
+
+                    // Check that frame count is sequential. If frames were skipped
+                    // or repeated, make a note of it.
+                    if frame_in.report.frame_count != self.frame_count_next {
+                        eprint!("F");
+                    }
+                    self.frame_count_next = frame_in.report.frame_count.wrapping_add(1);
+
+                    let frame = InternalFrame {
+                        frame: frame_in.frame,
+                    };
+                    if let Err(e) = self.frames_in.push(frame) {
+                        eprint!("I");
+                    }
                 }
             }
         }
-        self.sender.send(LoopbackMessage::In(v)).unwrap();
 
         unsafe { libusb_set_iso_packet_lengths(transfer, 512) };
 
@@ -1026,10 +1007,6 @@ impl CallbackOut for LoopbackFrameHandler {
     fn callback_out(&mut self, transfer: *mut ffi::libusb_transfer) {
         let num_iso_packets = unsafe { (*transfer).num_iso_packets } as usize;
 
-        self.sender.send(LoopbackMessage::Out(num_iso_packets)).unwrap();
-
-        let mut buffer = unsafe { slice::from_raw_parts_mut((*transfer).buffer, (*transfer).length.try_into().unwrap()) };
-
         let first_packet_size_adjustment = 0;
         for i in 0..num_iso_packets {
             let frame_count = if i == 0 {
@@ -1046,12 +1023,24 @@ impl CallbackOut for LoopbackFrameHandler {
             packet.length = (size_of::<TxUSBReport>() + frame_count * size_of::<TxFrame>()).try_into().unwrap();
             packet.actual_length = packet.length;
 
-            for c in &mut buffer[..packet.length as usize] {
-                *c = self.count as u8;
-                self.count += 1;
-            }
+            let buffer = unsafe {
+                let p = libusb_get_iso_packet_buffer(transfer, i.try_into().unwrap());
+                slice::from_raw_parts_mut(p, packet.actual_length.try_into().unwrap()) 
+            };
 
-            buffer = &mut buffer[packet.length as usize..];
+            let (usb_report, buffer) = buffer.split_at_mut(size_of::<TxUSBReport>());
+            let usb_report = bytemuck::from_bytes_mut::<TxUSBReport>(usb_report);
+            // usb_report.frame_count = ?;
+
+            for frame in buffer.chunks_exact_mut(size_of::<TxFrame>()) {
+                let frame = bytemuck::from_bytes_mut::<TxFrame>(frame);
+
+                if let Some(frame_out) = self.frames_out.pop() {
+                    frame.frame = frame_out.frame;
+                } else {
+                    eprint!("O");
+                }
+            }
         }
 
         let result = unsafe {

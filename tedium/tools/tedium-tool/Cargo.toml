@@ -23,3 +23,5 @@ bytemuck = "1.9"
 modular-bitfield-msb = "0.11"
 
 audio_thread_priority = "0.26"
+
+ringbuf = "0.2"
