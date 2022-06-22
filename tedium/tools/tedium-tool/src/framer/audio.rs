@@ -213,13 +213,13 @@ impl Default for Patching {
     }
 }
 
-struct AudioFrameOutHandler {
+struct AudioProcessor {
     patching: Patching,
     tone_plant: HashMap<ToneSource, Box<dyn ToneGenerator>>,
     detectors: HashMap<TimeslotAddress, Box<dyn Detector>>,
 }
 
-impl AudioFrameOutHandler {
+impl AudioProcessor {
     fn new() -> Self {
         use ToneSource::*;
 
@@ -489,7 +489,7 @@ struct LoopbackFrameHandler {
     unprocessed_frames_consumer: Consumer<InternalFrame>,
     processed_frames_producer: Producer<InternalFrame>,
     processed_frames_consumer: Consumer<InternalFrame>,
-    processor: AudioFrameOutHandler,
+    processor: AudioProcessor,
     debug_sender: Sender<DebugMessage>,
 }
 
@@ -504,7 +504,7 @@ impl LoopbackFrameHandler {
             unprocessed_frames_consumer,
             processed_frames_producer,
             processed_frames_consumer,
-            processor: AudioFrameOutHandler::new(),
+            processor: AudioProcessor::new(),
             debug_sender,
         }
     }
