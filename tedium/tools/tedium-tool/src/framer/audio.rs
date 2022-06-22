@@ -1007,16 +1007,12 @@ impl CallbackOut for LoopbackFrameHandler {
     fn callback_out(&mut self, transfer: *mut ffi::libusb_transfer) {
         let num_iso_packets = unsafe { (*transfer).num_iso_packets } as usize;
 
-        let first_packet_size_adjustment = 0;
         for i in 0..num_iso_packets {
-            let frame_count = if i == 0 {
-                match first_packet_size_adjustment {
-                    -1 => 0,
-                     1 => 2,
-                    _  => 1,
-                }
+            let available_frames = self.frames_out.len();
+            let frame_count = if available_frames > 2 {
+                2
             } else {
-                1
+                available_frames
             };
 
             let packet = unsafe { (*transfer).iso_packet_desc.get_unchecked_mut(i) };
