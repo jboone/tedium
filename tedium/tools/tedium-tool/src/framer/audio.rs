@@ -6,7 +6,7 @@ use std::mem::size_of;
 use std::ptr::NonNull;
 use std::slice;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::thread;
 
 use crate::codec::ulaw;
@@ -778,7 +778,8 @@ pub fn pump_loopback() -> Result<(), PumpError> {
     let mut transfers_in: Vec<IsochronousTransfer> = Vec::new();
     let mut transfers_out: Vec<IsochronousTransfer> = Vec::new();
 
-    let handler = Arc::new(Mutex::new(LoopbackFrameHandler::new()));
+    let (debug_sender, debug_receiver) = unbounded();
+    let handler = Arc::new(Mutex::new(LoopbackFrameHandler::new(debug_sender)));
 
     for _ in 0..TRANSFERS_COUNT {
         let transfer_in = IsochronousTransfer::new(
@@ -805,6 +806,35 @@ pub fn pump_loopback() -> Result<(), PumpError> {
         transfer_out.submit();
         transfers_out.push(transfer_out);
     }
+
+    thread::spawn(move || {
+        let instant_start = Instant::now();
+        let mut tx_fifo_level_range = (0, 0);
+
+        for message in debug_receiver {
+            match message {
+                DebugMessage::TxFIFORange(r) => {
+                    if r != tx_fifo_level_range {
+                        let elapsed = instant_start.elapsed();
+
+                        let mut range_str = ['\u{2500}'; 32];
+                        range_str[r.0 as usize] = '\u{2524}';
+                        range_str[r.1 as usize] = '\u{251c}';
+                        for i in (r.0 as usize)+1..(r.1 as usize) {
+                            range_str[i] = ' ';
+                        }
+                        let range_str = range_str.iter().cloned().collect::<String>();
+
+                        eprint!("\n{:6}.{:06}: {} ", elapsed.as_secs(), elapsed.subsec_micros(), range_str);
+                        tx_fifo_level_range = r;
+                    }
+                },
+                DebugMessage::FramerStatistics(s) => {
+                    eprint!("\n{s:?}");
+                },
+            }
+        }
+    });
 
     promote_current_thread_to_real_time(8, 8000).unwrap();
 
@@ -866,6 +896,12 @@ impl<T: CallbackOut> IsochronousTransferHandler for CallbackOutWrapper<T> {
 }
 
 #[derive(Copy, Clone, Debug)]
+enum DebugMessage {
+    TxFIFORange((u8, u8)),
+    FramerStatistics(FramerStatistics),
+}
+
+#[derive(Copy, Clone, Debug)]
 struct Frame {
     timeslot: [[Sample; CHANNELS]; TIMESLOTS_PER_CHANNEL],
 }
@@ -878,16 +914,18 @@ struct InternalFrame {
 struct LoopbackFrameHandler {
     rx_packet_processor: RxPacketProcessor,
     frames_out: Consumer<InternalFrame>,
+    debug_sender: Sender<DebugMessage>,
 }
 
 impl LoopbackFrameHandler {
-    fn new() -> Self {
+    fn new(debug_sender: Sender<DebugMessage>) -> Self {
         // 40 frames == 5 milliseconds.
         let (frames_in, frames_out) = RingBuffer::new(40).split();
 
         Self {
-            rx_packet_processor: RxPacketProcessor::new(frames_in),
+            rx_packet_processor: RxPacketProcessor::new(frames_in, debug_sender.clone()),
             frames_out,
+            debug_sender,
         }
     }
 }
@@ -981,22 +1019,58 @@ impl<'a> RxPacket<'a> {
     }
 }
 
+const RX_FIFO_DEPTH: usize = 8;
+const TX_FIFO_DEPTH: usize = 32;
+
+#[derive(Copy, Clone, Debug)]
+struct FramerStatistics {
+    // TODO: Refactor, some of these are measurements over the period of `frame_count`,
+    // others are cumulative.
+    rx_fifo_level_histogram: [u32; RX_FIFO_DEPTH],
+    tx_fifo_level_histogram: [u32; TX_FIFO_DEPTH],
+    rx_fifo_underflow_count: u16,
+    tx_fifo_overflow_count: u16,
+    sof_discontinuity_count: u32,
+    frame_discontinuity_count: u32,
+    ringbuf_full_drop_count: u32,
+    frame_count: u32,
+}
+
+impl Default for FramerStatistics {
+    fn default() -> Self {
+        Self {
+            rx_fifo_level_histogram: [0; RX_FIFO_DEPTH],
+            tx_fifo_level_histogram: [0; TX_FIFO_DEPTH],
+            rx_fifo_underflow_count: 0,
+            tx_fifo_overflow_count: 0,
+            sof_discontinuity_count: 0,
+            frame_discontinuity_count: 0,
+            ringbuf_full_drop_count: 0,
+            frame_count: 0,
+        }
+    }
+}
+
 struct RxPacketProcessor {
     frames_in: Producer<InternalFrame>,
+    framer_statistics: FramerStatistics,
     sof_count_next: u32,
     frame_count_next: u32,
     tx_fifo_level_min: u8,
     tx_fifo_level_max: u8,
+    debug_sender: Sender<DebugMessage>,
 }
 
 impl RxPacketProcessor {
-    fn new(frames_in: Producer<InternalFrame>) -> Self {
+    fn new(frames_in: Producer<InternalFrame>, debug_sender: Sender<DebugMessage>) -> Self {
         Self {
             frames_in,
+            framer_statistics: FramerStatistics::default(),
             sof_count_next: 0,
             frame_count_next: 0,
             tx_fifo_level_min: u8::MAX,
             tx_fifo_level_max: u8::MIN,
+            debug_sender,
         }
     }
 
@@ -1010,10 +1084,15 @@ impl RxPacketProcessor {
         // Check that USB start-of-frame count is sequential. If frames were skipped
         // or repeated, make a note of it.
         if usb_report.sof_count != self.sof_count_next {
-            eprint!("S");
+            self.framer_statistics.sof_discontinuity_count += 1;
         }
         self.sof_count_next = usb_report.sof_count.wrapping_add(1);
 
+        self.framer_statistics.rx_fifo_level_histogram[usb_report.fifo_rx_level as usize] += 1;
+        self.framer_statistics.tx_fifo_level_histogram[usb_report.fifo_tx_level as usize] += 1;
+        self.framer_statistics.rx_fifo_underflow_count = usb_report.fifo_rx_underflow_count;
+        self.framer_statistics.tx_fifo_overflow_count = usb_report.fifo_tx_overflow_count;
+        
         if usb_report.fifo_tx_level < self.tx_fifo_level_min {
             self.tx_fifo_level_min = usb_report.fifo_tx_level;
         }
@@ -1022,10 +1101,16 @@ impl RxPacketProcessor {
         }
 
         for frame_in in packet.frames() {
+            self.framer_statistics.frame_count += 1;
+            if self.framer_statistics.frame_count >= 8000 {
+                self.debug_sender.send(DebugMessage::FramerStatistics(self.framer_statistics)).unwrap();
+                self.framer_statistics = FramerStatistics::default();
+            }
+    
             // Check that frame count is sequential. If frames were skipped
             // or repeated, make a note of it.
             if frame_in.report.frame_count != self.frame_count_next {
-                eprint!("F");
+                self.framer_statistics.frame_discontinuity_count += 1;
             }
             self.frame_count_next = frame_in.report.frame_count.wrapping_add(1);
 
@@ -1034,7 +1119,7 @@ impl RxPacketProcessor {
                 frame_count: frame_in.report.frame_count,
             };
             if let Err(e) = self.frames_in.push(frame) {
-                eprint!("I");
+                self.framer_statistics.ringbuf_full_drop_count += 1;
             }
         }
     }
@@ -1077,6 +1162,12 @@ impl LoopbackFrameHandler {
             LIBUSB_SUCCESS => {},
             e => eprintln!("IN: libusb_submit_transfer error: {e}"),
         }
+
+        // Do non-essential stuff after we've returned the USB transfer
+        // to the USB stack.
+        self.debug_sender.send(DebugMessage::TxFIFORange(
+            (self.rx_packet_processor.tx_fifo_level_min, self.rx_packet_processor.tx_fifo_level_max)
+        )).unwrap();
     }
 
     fn handle_out(&mut self, transfer: *mut ffi::libusb_transfer) {
