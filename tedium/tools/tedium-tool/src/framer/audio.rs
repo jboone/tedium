@@ -885,10 +885,12 @@ struct LoopbackFrameHandler {
 
 impl LoopbackFrameHandler {
     fn new() -> Self {
-        let (producer, consumer) = RingBuffer::new(40).split();
+        // 40 frames == 5 milliseconds.
+        let (frames_in, frames_out) = RingBuffer::new(40).split();
+
         Self {
-            frames_in: producer,    // 40 frames == 5 milliseconds.
-            frames_out: consumer,
+            frames_in,
+            frames_out,
             sof_count_next: 0,
             frame_count_next: 0,
             tx_fifo_level_min: 0,
