@@ -875,6 +875,7 @@ struct LoopbackFrameHandler {
     frames_out: Consumer<InternalFrame>,
     sof_count_next: u32,
     frame_count_next: u32,
+    tx_fifo_level_min: u8,
 }
 
 impl LoopbackFrameHandler {
@@ -885,6 +886,7 @@ impl LoopbackFrameHandler {
             frames_out: consumer,
             sof_count_next: 0,
             frame_count_next: 0,
+            tx_fifo_level_min: 0,
         }
     }
 }
@@ -953,6 +955,9 @@ impl CallbackIn for LoopbackFrameHandler {
 
         let num_iso_packets = unsafe { (*transfer).num_iso_packets } as usize;
 
+        let mut tx_fifo_level_min = 31;
+        let mut tx_fifo_level_max = 0;
+
         for i in 0..num_iso_packets {
             let packet = unsafe { (*transfer).iso_packet_desc.get_unchecked_mut(i) };
 
@@ -971,6 +976,13 @@ impl CallbackIn for LoopbackFrameHandler {
                     eprint!("S");
                 }
                 self.sof_count_next = usb_report.sof_count.wrapping_add(1);
+
+                if usb_report.fifo_tx_level < tx_fifo_level_min {
+                    tx_fifo_level_min = usb_report.fifo_tx_level;
+                }
+                if usb_report.fifo_tx_level > tx_fifo_level_max {
+                    tx_fifo_level_max = usb_report.fifo_tx_level;
+                }
 
                 for frame_in in buffer.chunks_exact(size_of::<RxFrame>()) {
                     let frame_in = bytemuck::from_bytes::<RxFrame>(frame_in);
@@ -1002,12 +1014,21 @@ impl CallbackIn for LoopbackFrameHandler {
             LIBUSB_SUCCESS => {},
             e => eprintln!("IN: libusb_submit_transfer error: {e}"),
         }
+
+        self.tx_fifo_level_min = tx_fifo_level_min;
     }
 }
 
 impl CallbackOut for LoopbackFrameHandler {
     fn callback_out(&mut self, transfer: *mut ffi::libusb_transfer) {
         let num_iso_packets = unsafe { (*transfer).num_iso_packets } as usize;
+
+        if self.tx_fifo_level_min > 12 {
+            // Simple way to draw down the TX FIFO level if it's too high.
+            // We're dropping a frame here...
+            let _ = self.frames_out.pop();
+            eprint!("D");
+        }
 
         for i in 0..num_iso_packets {
             let available_frames = self.frames_out.len();
