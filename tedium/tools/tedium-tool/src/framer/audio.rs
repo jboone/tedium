@@ -867,6 +867,7 @@ struct Frame {
 
 struct InternalFrame {
     frame: Frame,
+    frame_count: u32,
 }
 
 struct LoopbackFrameHandler {
@@ -983,6 +984,7 @@ impl CallbackIn for LoopbackFrameHandler {
 
                     let frame = InternalFrame {
                         frame: frame_in.frame,
+                        frame_count: frame_in.report.frame_count,
                     };
                     if let Err(e) = self.frames_in.push(frame) {
                         eprint!("I");
@@ -1033,6 +1035,7 @@ impl CallbackOut for LoopbackFrameHandler {
 
                 if let Some(frame_out) = self.frames_out.pop() {
                     frame.frame = frame_out.frame;
+                    frame.report.frame_count = frame_out.frame_count;
                 } else {
                     eprint!("O");
                 }
