@@ -953,6 +953,18 @@ unsafe impl Pod for TxFrame {}
 
 impl CallbackIn for LoopbackFrameHandler {
     fn callback_in(&mut self, transfer: *mut ffi::libusb_transfer) {
+        self.handle_in(transfer);
+    }
+}
+
+impl CallbackOut for LoopbackFrameHandler {
+    fn callback_out(&mut self, transfer: *mut ffi::libusb_transfer) {
+        self.handle_out(transfer);
+    }
+}
+
+impl LoopbackFrameHandler {
+    fn handle_in(&mut self, transfer: *mut ffi::libusb_transfer) {
         let transfer_status = unsafe { (*transfer).status };
         if transfer_status != LIBUSB_TRANSFER_COMPLETED {
             eprintln!("IN: transfer.status = {transfer_status}");
@@ -1022,10 +1034,8 @@ impl CallbackIn for LoopbackFrameHandler {
 
         self.tx_fifo_level_min = tx_fifo_level_min;
     }
-}
 
-impl CallbackOut for LoopbackFrameHandler {
-    fn callback_out(&mut self, transfer: *mut ffi::libusb_transfer) {
+    fn handle_out(&mut self, transfer: *mut ffi::libusb_transfer) {
         let num_iso_packets = unsafe { (*transfer).num_iso_packets } as usize;
 
         if self.tx_fifo_level_min > 12 {
