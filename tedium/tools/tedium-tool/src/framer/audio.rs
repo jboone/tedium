@@ -768,18 +768,23 @@ pub fn pump_loopback() -> Result<(), PumpError> {
 
     let device_handle = device;
 
-    const NUM_ISO_PACKETS: usize = 8;   // For each USB transfer request (kernel URB?), get one millisecond worth of frames.
+    // For each USB transfer request (kernel URB?), get one millisecond worth of frames.
+    // 8: Transfers are one USB-time millisecond long, nominally consisting of eight framer frames.
+    const PACKETS_PER_TRANSFER: usize = 8;
+
+    // Total number of transfers that can be in flight.
+    const TRANSFERS_COUNT: usize = 8;
 
     let mut transfers_in: Vec<IsochronousTransfer> = Vec::new();
     let mut transfers_out: Vec<IsochronousTransfer> = Vec::new();
 
     let handler = Arc::new(Mutex::new(LoopbackFrameHandler::new()));
 
-    for _ in 0..8 {
+    for _ in 0..TRANSFERS_COUNT {
         let transfer_in = IsochronousTransfer::new(
             device_handle.clone(),
             LIBUSB_ENDPOINT_IN | EndpointNumber::FrameStream as u8,
-            NUM_ISO_PACKETS,
+            PACKETS_PER_TRANSFER,
             512,
             0,
             Box::new(CallbackInWrapper::new(handler.clone())),
@@ -791,7 +796,7 @@ pub fn pump_loopback() -> Result<(), PumpError> {
         let transfer_out = IsochronousTransfer::new(
             device_handle.clone(),
             LIBUSB_ENDPOINT_OUT | EndpointNumber::FrameStream as u8,
-            NUM_ISO_PACKETS,
+            PACKETS_PER_TRANSFER,
             512,
             0,
             Box::new(CallbackOutWrapper::new(handler.clone())),
