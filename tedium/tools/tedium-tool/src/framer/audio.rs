@@ -1037,7 +1037,7 @@ impl CallbackOut for LoopbackFrameHandler {
 
         for i in 0..num_iso_packets {
             let available_frames = self.frames_out.len();
-            let frame_count = if available_frames > 2 {
+            let frame_count = if available_frames >= 2 {
                 2
             } else {
                 available_frames
