@@ -133,39 +133,4 @@ class MicroprocessorInterface(Elaboratable):
 
 					m.next = 'IDLE'
 
-			# with m.State("WAIT-WRITE"):
-			# 	# Wait for RDY to acknowledge compoletion of the write operation.
-			# 	with m.If(self.bus.rdy):
-			# 		m.d.sync += [
-			# 			self.bus.cs.eq(0),
-			# 			self.bus.rd.eq(0),
-			# 			self.bus.wr.eq(0),
-			# 			self.data_rd.eq(self.bus.data.i),
-			# 			self.bus.data.oe.eq(0),
-			# 		]
-
-			# 		m.next = 'WAIT-RDY'
-
-			# with m.State("WAIT-READ"):
-			# 	# Wait for RDY to acknowledge completion of the read operation.
-			# 	with m.If(self.bus.rdy):
-			# 		m.d.sync += [
-			# 			self.bus.cs.eq(0),
-			# 			self.bus.rd.eq(0),
-			# 			self.bus.wr.eq(0),
-			# 			self.data_rd.eq(self.bus.data.i),
-			# 			self.bus.data.oe.eq(0),
-			# 		]
-
-			# 		m.next = 'WAIT-RDY'
-
-			# with m.State("WAIT-RDY"):
-			# 	# Wait for RDY to acknowledge completion of the transaction.
-			# 	with m.If(~self.bus.rdy):
-			# 		m.d.sync += [
-			# 			self.busy.eq(0)
-			# 		]
-
-			# 		m.next = 'IDLE'
-
 		return m
