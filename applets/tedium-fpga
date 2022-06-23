@@ -369,93 +369,12 @@ class Device(Elaboratable):
         usb_framer(m, usb, usb_iso_out_ep, usb_iso_in_ep, framer_outputs_enable)
 
         ###############################################################
-        # Framer span interfaces, clock recovery and selection.
-
-        if False:
-            # Report to be sent to the host with each frame of timeslot data.
-            framer_report = FramerReport()
-
-            # Report to be sent to the host with each USB frame (which may
-            # consist of zero, one, or two timeslot frames.
-            usb_report = USBReport()
-
-            rx_fifo_record_size = TIMESLOTS_PER_CHANNEL * CHANNELS + framer_report.size_bytes
-            rx_fifo_depth = 8
-            tx_fifo_record_size = TIMESLOTS_PER_CHANNEL * CHANNELS
-            tx_fifo_depth = 32
-
-            assert((rx_fifo_record_size * 2 + usb_report.size_bytes) <= Descriptors.FRAME_BYTES_MAX)
-            assert((tx_fifo_record_size * 2                        ) <= Descriptors.FRAME_BYTES_MAX)
-
-            # Selected recovered receive clock.
-            sclk = Signal()
-
-            # Serial clock for receive and transmit framer serial data.
-            serclk = Signal()
-
-            # Physical receive interfaces from the framer integrated circuit.
-            rx_phys = [platform.request("rx", n) for n in range(CHANNELS)]
-
-            # Physical transmit interfaces to the framer integrated circuit.
-            tx_phys = [platform.request("tx", n) for n in range(CHANNELS)]
-
-            # Bit timing determines when serial data is launched or captured
-            # on the FPGA <-> framer interfaces.
-            bit_timing = m.submodules.bit_timing = BitTiming()
-            m.d.comb += bit_timing.serclk.eq(serclk)
-
-            # System timing is the "sync" domain global timing for frame and
-            # timeslot data. Framer receive and transmit interfaces are abstracted
-            # (time-offset) appropriately so that this single global timing
-            # reference applies to all receive and transmit interfaces.
-            system_timing = m.submodules.system_timing = SystemTiming(TIMESLOTS_PER_CHANNEL)
-            m.d.comb += system_timing.bit_end_strobe.eq(bit_timing.iface.bit_end_strobe)
-
-            # Top-level block containing all receive interface and timing logic
-            # to turn raw physical/electrical receive interfaces from the framer
-            # into timeslot data synchronized to system timing.
-
-            rx = m.submodules.rx = Rx(rx_phys, system_timing, framer_report)
-            rx_fifo = m.submodules.rx_fifo = PagedAsyncFIFO(rx_fifo_record_size, rx_fifo_depth, r_domain="usb", w_domain="sync")
-            rx_fifo_writer = m.submodules.rx_fifo_writer = PagedFIFOWriteInterface(rx.iface, rx_fifo.writer)
-            rx_fifo_reader = m.submodules.rx_fifo_reader = RxFIFOToUSBInAdapter(rx_fifo.reader, usb_iso_in_ep, usb_report)
-
-            tx = m.submodules.tx = Tx(tx_phys, system_timing)
-            tx_fifo = m.submodules.tx_fifo = PagedAsyncFIFO(tx_fifo_record_size, tx_fifo_depth, r_domain="sync", w_domain="usb")
-
-            # Receiver recovered clock and serial clock routing.
-            m.d.comb += [
-                # Choose a recovered receiver clock.
-                rx.sclk_index.eq(0),
-                sclk.eq(rx.sclk),
-
-                # Use the selected recovered receiver clock as the system serial clock.
-                serclk.eq(sclk),
-                rx.serclk.eq(serclk),
-                tx.serclk.eq(serclk),
-            ]
-
-            m.d.comb += [
-                rx.output_enable.eq(framer_outputs_enable),
-                tx.output_enable.eq(framer_outputs_enable),
-            ]
-
-            ###############################################################
-            # USB OUT -> TX FIFO -> Framer
-
-            m.submodules.usb_to_tx_fifo = usb_to_tx_fifo = USBToPagedFIFOAdapter(usb_iso_out_ep, microprocessor_if.tx_fifo_writer)
-
-        ###############################################################
         # Test Points
 
         # NOTE: LIU loop-back modes LIUCCR2.LOOP2_n:
         # "Dual" (0b100) and "Digital" (0b111) will go to wacky RXSERCLK
         # rates (72MHz?!) if clock source select CSR.CSS is set to "Loop
         # Timing Mode".
-
-        # rx_fifo_r_en_toggle = Signal()
-        # with m.If(self.rx_fifo.debug_fifo_r_en):
-        #     m.d.usb += rx_fifo_r_en_toggle.eq(~rx_fifo_r_en_toggle)
 
         tp9  = platform.request("tp9" ) # FPGA P2, left of two center pads near SPI flash
         tp7  = platform.request("tp7" ) # FPGA N1, right of two center pads near SPI flash
