@@ -10,7 +10,6 @@ from typing import List
 
 from amaranth                       import *
 from amaranth.hdl.ast               import Rose
-from amaranth.lib.fifo import SyncFIFOBuffered
 
 from luna.usb2                      import USBDevice
 
@@ -86,6 +85,92 @@ class TxFrameReport(Report):
 
     def __init__(self):
         super().__init__(self.LAYOUT, name=self.__class__.__name__)
+
+def usb_framer(m: Module, usb: USBDevice, ep_out: USBIsochronousOutEndpointTedium, ep_in: USBIsochronousInEndpointTedium, output_enable: Signal):
+    """
+    Loop USB OUT data to USB IN through FIFOs connected via a timeslot interface.
+    """
+
+    rx_fifo_depth = 8
+    tx_fifo_depth = 32
+
+    rx_frame_report = RxFrameReport()
+    rx_frame_record_size = TIMESLOTS_PER_FRAME + rx_frame_report.length_bytes()
+
+    tx_frame_report = TxFrameReport()
+    tx_frame_record_size = TIMESLOTS_PER_FRAME + tx_frame_report.length_bytes()
+
+    rx_usb_report = RxUSBReport()
+    tx_usb_report = TxUSBReport()
+
+    sclk = Signal()
+    sclk_index = Signal(range(CHANNELS))
+    m.d.comb += sclk_index.eq(0)
+
+    serclk = Signal()
+
+    bit_timing = m.submodules.bit_timing = BitTiming()
+    m.d.comb += bit_timing.serclk.eq(serclk)
+
+    system_timing = m.submodules.system_timing = SystemTiming(TIMESLOTS_PER_CHANNEL)
+    m.d.comb += system_timing.bit_end_strobe.eq(bit_timing.iface.bit_end_strobe)
+
+    rx_phys = [platform.request("rx", n) for n in range(CHANNELS)]
+    rx_blocks: List[RxBlock] = []
+    for i, phy in enumerate(rx_phys):
+        rx_block = RxBlock(phy, system_timing.iface)
+        rx_blocks.append(rx_block)
+        m.submodules[f"rx_block{i}"] = rx_block
+
+        m.d.comb += [
+            rx_block.serclk.eq(serclk),
+            rx_block.output_enable.eq(output_enable),
+        ]
+    rx_timeslots = [rx_block.timeslot for rx_block in rx_blocks]
+
+    rx_sclks = Cat([block.sclk for block in rx_blocks])
+    m.d.comb += sclk.eq(rx_sclks.bit_select(sclk_index, 1))
+    m.d.comb += serclk.eq(sclk)
+
+    rx_fifo        = m.submodules.rx_fifo        = PagedAsyncFIFO(rx_frame_record_size, rx_fifo_depth, w_domain="sync", r_domain="usb")
+    rx_framer_fifo = m.submodules.rx_framer_fifo = RxFramerToFIFOAdapter(rx_fifo.writer, rx_timeslots, system_timing.iface, rx_frame_report)
+    rx_fifo_usb    = m.submodules.rx_fifo_usb    = RxFIFOToUSBInAdapter(rx_fifo.reader, ep_in, rx_usb_report)
+    m.d.comb += rx_fifo_usb.start_of_frame.eq(usb.sof_detected)
+
+    tx_phys = [platform.request("tx", n) for n in range(CHANNELS)]
+    tx_blocks: List[TxBlock] = []
+    for i, phy in enumerate(tx_phys):
+        tx_block = TxBlock(phy, system_timing.iface)
+        tx_blocks.append(tx_block)
+        m.submodules[f"tx_block{i}"] = tx_block
+
+        m.d.comb += [
+            tx_block.serclk.eq(serclk),
+            tx_block.output_enable.eq(output_enable),
+        ]
+    tx_timeslots = [tx_block.timeslot for tx_block in tx_blocks]
+
+    tx_fifo        = m.submodules.tx_fifo        = PagedAsyncFIFO(tx_frame_record_size, tx_fifo_depth, w_domain="usb", r_domain="sync")
+    tx_fifo_framer = m.submodules.tx_fifo_framer = TxFIFOToFramerAdapter(tx_fifo.reader, tx_timeslots, system_timing.iface, tx_frame_report)
+    tx_usb_fifo    = m.submodules.tx_usb_fifo    = TxUSBOutToFIFOAdapter(ep_out, tx_fifo.writer, tx_usb_report)
+    m.d.comb += tx_usb_fifo.start_of_frame.eq(usb.sof_detected)
+
+    with m.If(usb.sof_detected):
+        m.d.usb += [
+            rx_usb_report.sof_count.eq(rx_usb_report.sof_count + 1),
+            rx_usb_report.fifo_rx_level.eq(rx_fifo.reader.r_level2),
+            rx_usb_report.fifo_tx_level.eq(tx_fifo.writer.w_level2),
+            rx_usb_report.sequence_count.eq(rx_usb_report.sequence_count + 1),
+        ]
+    with m.If(rx_fifo.reader.r_underflow):
+        m.d.usb += rx_usb_report.fifo_rx_underflow_count.eq(rx_usb_report.fifo_rx_underflow_count + 1),
+    with m.If(tx_fifo.writer.w_overflow):
+        m.d.usb += rx_usb_report.fifo_tx_overflow_count.eq(rx_usb_report.fifo_tx_overflow_count + 1),
+
+    with m.If(system_timing.iface.frame_strobe):
+        m.d.sync += [
+            rx_frame_report.frame_count.eq(rx_frame_report.frame_count + 1),
+        ]
 
 class Device(Elaboratable):
 
@@ -191,164 +276,6 @@ class Device(Elaboratable):
         ]
 
         ###############################################################
-        # USB isochronous loopback for testing.
-
-        def usb_in_sequence(m: Module, usb: USBDevice, ep_in: USBIsochronousInEndpointTedium):
-            """
-            Generate IN packets of three different lengths, with an incrementing sequence.
-            """
-            usb_frame_counter = Signal(8)
-            with m.If(usb.sof_detected):
-                m.d.usb += usb_frame_counter.eq(usb_frame_counter + 1)
-
-            # Create pseudo-random IN packet length.
-            bytes_in_frame = Signal.like(ep_in.bytes_in_frame)
-            with m.Switch(usb_frame_counter):
-                with m.Case(211):
-                    m.d.comb += bytes_in_frame.eq(211 * 0 + 12)
-                with m.Case(53):
-                    m.d.comb += bytes_in_frame.eq(211 * 2 + 12)
-                with m.Default():
-                    m.d.comb += bytes_in_frame.eq(211 * 1 + 12)
-
-            usb_in_counter = Signal(8)
-            with m.If(ep_in.byte_advance):
-                m.d.usb += usb_in_counter.eq(usb_in_counter + 1)
-
-            m.d.comb += [
-                ep_in.bytes_in_frame.eq(bytes_in_frame),
-                ep_in.value.eq(usb_in_counter),
-            ]
-
-        def usb_in_counter(m: Module, usb: USBDevice, ep_in: USBIsochronousInEndpointTedium):
-            """
-            Generate IN packets that count USB (micro)frames.
-            """
-            usb_frame_counter = Signal(32)
-            with m.If(usb.sof_detected):
-                m.d.usb += usb_frame_counter.eq(usb_frame_counter + 1)
-
-            m.d.comb += [
-                ep_in.bytes_in_frame.eq(4),
-                ep_in.value.eq(usb_frame_counter.word_select(ep_in.address, 8)),
-            ]
-
-        def usb_out_in_loopback_local(m: Module, usb: USBDevice, ep_out: USBIsochronousOutEndpointTedium, ep_in: USBIsochronousInEndpointTedium):
-            """
-            Put packets from OUT into a FIFO, then read that FIFO to IN, in three different lengths.
-            """
-            packet_size_two_frames  = 211 * 2 + 12
-            packet_size_one_frame   = 211 * 1 + 12
-            packet_size_zero_frames = 0
-            
-            loopback_fifo = m.submodules.loopback_fifo = DomainRenamer({"sync": "usb"})(SyncFIFOBuffered(width=8, depth=2048))
-
-            bytes_in_frame = Signal.like(ep_in.bytes_in_frame)
-            with m.If(loopback_fifo.r_level >= packet_size_two_frames):
-                m.d.comb += bytes_in_frame.eq(packet_size_two_frames)
-            with m.Elif(loopback_fifo.r_level >= packet_size_one_frame):
-                m.d.comb += bytes_in_frame.eq(packet_size_one_frame)
-            with m.Else():
-                m.d.comb += bytes_in_frame.eq(packet_size_zero_frames)
-
-            m.d.comb += [
-                ep_in.bytes_in_frame.eq(bytes_in_frame),
-                loopback_fifo.r_en.eq(ep_in.byte_advance),
-                ep_in.value.eq(loopback_fifo.r_data),
-            ]
-
-            m.d.comb += [
-                loopback_fifo.w_en.eq(ep_out.write_en),
-                loopback_fifo.w_data.eq(ep_out.write_payload),
-            ]
-
-        def usb_framer(m: Module, usb: USBDevice, ep_out: USBIsochronousOutEndpointTedium, ep_in: USBIsochronousInEndpointTedium, output_enable: Signal):
-            """
-            Loop USB OUT data to USB IN through FIFOs connected via a timeslot interface.
-            """
-
-            rx_fifo_depth = 8
-            tx_fifo_depth = 32
-
-            rx_frame_report = RxFrameReport()
-            rx_frame_record_size = TIMESLOTS_PER_FRAME + rx_frame_report.length_bytes()
-
-            tx_frame_report = TxFrameReport()
-            tx_frame_record_size = TIMESLOTS_PER_FRAME + tx_frame_report.length_bytes()
-
-            rx_usb_report = RxUSBReport()
-            tx_usb_report = TxUSBReport()
-
-            sclk = Signal()
-            sclk_index = Signal(range(CHANNELS))
-            m.d.comb += sclk_index.eq(0)
-
-            serclk = Signal()
-
-            bit_timing = m.submodules.bit_timing = BitTiming()
-            m.d.comb += bit_timing.serclk.eq(serclk)
-
-            system_timing = m.submodules.system_timing = SystemTiming(TIMESLOTS_PER_CHANNEL)
-            m.d.comb += system_timing.bit_end_strobe.eq(bit_timing.iface.bit_end_strobe)
-
-            rx_phys = [platform.request("rx", n) for n in range(CHANNELS)]
-            rx_blocks: List[RxBlock] = []
-            for i, phy in enumerate(rx_phys):
-                rx_block = RxBlock(phy, system_timing.iface)
-                rx_blocks.append(rx_block)
-                m.submodules[f"rx_block{i}"] = rx_block
-
-                m.d.comb += [
-                    rx_block.serclk.eq(serclk),
-                    rx_block.output_enable.eq(output_enable),
-                ]
-            rx_timeslots = [rx_block.timeslot for rx_block in rx_blocks]
-
-            rx_sclks = Cat([block.sclk for block in rx_blocks])
-            m.d.comb += sclk.eq(rx_sclks.bit_select(sclk_index, 1))
-            m.d.comb += serclk.eq(sclk)
-
-            rx_fifo        = m.submodules.rx_fifo        = PagedAsyncFIFO(rx_frame_record_size, rx_fifo_depth, w_domain="sync", r_domain="usb")
-            rx_framer_fifo = m.submodules.rx_framer_fifo = RxFramerToFIFOAdapter(rx_fifo.writer, rx_timeslots, system_timing.iface, rx_frame_report)
-            rx_fifo_usb    = m.submodules.rx_fifo_usb    = RxFIFOToUSBInAdapter(rx_fifo.reader, ep_in, rx_usb_report)
-            m.d.comb += rx_fifo_usb.start_of_frame.eq(usb.sof_detected)
-
-            tx_phys = [platform.request("tx", n) for n in range(CHANNELS)]
-            tx_blocks: List[TxBlock] = []
-            for i, phy in enumerate(tx_phys):
-                tx_block = TxBlock(phy, system_timing.iface)
-                tx_blocks.append(tx_block)
-                m.submodules[f"tx_block{i}"] = tx_block
-
-                m.d.comb += [
-                    tx_block.serclk.eq(serclk),
-                    tx_block.output_enable.eq(output_enable),
-                ]
-            tx_timeslots = [tx_block.timeslot for tx_block in tx_blocks]
-
-            tx_fifo        = m.submodules.tx_fifo        = PagedAsyncFIFO(tx_frame_record_size, tx_fifo_depth, w_domain="usb", r_domain="sync")
-            tx_fifo_framer = m.submodules.tx_fifo_framer = TxFIFOToFramerAdapter(tx_fifo.reader, tx_timeslots, system_timing.iface, tx_frame_report)
-            tx_usb_fifo    = m.submodules.tx_usb_fifo    = TxUSBOutToFIFOAdapter(ep_out, tx_fifo.writer, tx_usb_report)
-            m.d.comb += tx_usb_fifo.start_of_frame.eq(usb.sof_detected)
-
-            with m.If(usb.sof_detected):
-                m.d.usb += [
-                    rx_usb_report.sof_count.eq(rx_usb_report.sof_count + 1),
-                    rx_usb_report.fifo_rx_level.eq(rx_fifo.reader.r_level2),
-                    rx_usb_report.fifo_tx_level.eq(tx_fifo.writer.w_level2),
-                    rx_usb_report.sequence_count.eq(rx_usb_report.sequence_count + 1),
-                ]
-            with m.If(rx_fifo.reader.r_underflow):
-                m.d.usb += rx_usb_report.fifo_rx_underflow_count.eq(rx_usb_report.fifo_rx_underflow_count + 1),
-            with m.If(tx_fifo.writer.w_overflow):
-                m.d.usb += rx_usb_report.fifo_tx_overflow_count.eq(rx_usb_report.fifo_tx_overflow_count + 1),
-
-            with m.If(system_timing.iface.frame_strobe):
-                m.d.sync += [
-                    rx_frame_report.frame_count.eq(rx_frame_report.frame_count + 1),
-                ]
-
-        ###############################################################
         # USB isochronous endpoints for transfer of timeslot data.
 
         usb_iso_in_ep = USBIsochronousInEndpointTedium(
@@ -363,9 +290,6 @@ class Device(Elaboratable):
         )
         usb.add_endpoint(usb_iso_out_ep)
 
-        # usb_in_sequence(m, usb, usb_iso_in_ep)
-        # usb_in_counter(m, usb, usb_iso_in_ep)
-        # usb_out_in_loopback(m, usb, usb_iso_out_ep, usb_iso_in_ep)
         usb_framer(m, usb, usb_iso_out_ep, usb_iso_in_ep, framer_outputs_enable)
 
         ###############################################################
