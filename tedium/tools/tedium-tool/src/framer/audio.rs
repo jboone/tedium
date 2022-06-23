@@ -9,6 +9,7 @@ use std::thread;
 use crate::codec::ulaw;
 use crate::detector::{dtmf, Detector};
 use crate::framer::device::open_device;
+use crate::framer::usb::{InterfaceNumber, AlternateSetting, EndpointNumber};
 use crate::generator::ToneGenerator;
 use crate::generator::dual_tone::DualToneGenerator;
 
@@ -304,30 +305,6 @@ impl AudioProcessor {
 }
 
 ///////////////////////////////////////////////////////////////////////
-
-// TODO: Keep synchronized with `gateware/descriptors_vendor.py`.
-#[derive(Copy, Clone, Debug)]
-#[repr(u8)]
-enum AlternateSetting {
-    Idle = 0,
-    Active = 1,
-}
-
-// TODO: Keep synchronized with `gateware/descriptors_vendor.py`.
-#[derive(Copy, Clone, Debug)]
-#[repr(u8)]
-enum InterfaceNumber {
-    FrameStream = 0,
-    Interrupt = 1,
-}
-
-// TODO: Keep synchronized with `gateware/descriptors_vendor.py`.
-#[derive(Copy, Clone, Debug)]
-#[repr(u8)]
-enum EndpointNumber {
-    FrameStream = 1,
-    Interrupt = 2,
-}
 
 pub fn pump_loopback() -> Result<(), PumpError> {
     let mut context = rusb::Context::new()?;

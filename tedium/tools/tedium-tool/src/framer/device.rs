@@ -5,6 +5,8 @@ use std::{time::Duration, marker::PhantomData, os::raw::c_int, fmt};
 use crossbeam::channel::Sender;
 use rusb::{self, UsbContext, constants::{LIBUSB_ENDPOINT_IN, LIBUSB_ENDPOINT_DIR_MASK}, Error};
 
+use crate::framer::usb::EndpointNumber;
+
 use super::register::*;
 
 pub(crate) type RegisterAddress = u16;
@@ -583,7 +585,7 @@ impl AsyncThing {
     // pub fn run(handle: &rusb::DeviceHandle<rusb::Context>, sender: Sender<AsyncThingMessage>) -> Result<()> {        
         let mut handle = open_device(context)?;
 
-        let endpoint = LIBUSB_ENDPOINT_IN | 9;
+        let endpoint = LIBUSB_ENDPOINT_IN | EndpointNumber::Interrupt as u8;
         if endpoint & LIBUSB_ENDPOINT_DIR_MASK != LIBUSB_ENDPOINT_IN {
             return Err(Error::InvalidParam);
         }
