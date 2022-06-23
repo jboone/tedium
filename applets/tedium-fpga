@@ -151,27 +151,26 @@ class Device(Elaboratable):
         # Create an interrupt endpoint which will carry the value of our counter to the host
         # each time our interrupt EP is polled.
 
-        if False:
-            interrupt_ep = USBSignalInEndpointTedium(
-                width=32,
-                endpoint_number=Descriptors.EndpointNumber.Interrupt,
-                endianness="big"
-            )
-            usb.add_endpoint(interrupt_ep)
+        interrupt_ep = USBSignalInEndpointTedium(
+            width=32,
+            endpoint_number=Descriptors.EndpointNumber.Interrupt,
+            endianness="big"
+        )
+        usb.add_endpoint(interrupt_ep)
 
-            # TODO: SEND SOMETHING USEFUL OVER THE INTERRUPT!        
-            m.d.comb += interrupt_ep.signal.eq(0x69696969)
+        # TODO: SEND SOMETHING USEFUL OVER THE INTERRUPT!        
+        m.d.comb += interrupt_ep.signal.eq(0x69696969)
 
-            # NOTE: WOW, WHAT A FOOT-GUN! Using Fell() or Rose(), don't forget
-            # to specify your clock domain, or you'll get "sync" by default,
-            # which will cause of erratic behavior.
+        # NOTE: WOW, WHAT A FOOT-GUN! Using Fell() or Rose(), don't forget
+        # to specify your clock domain, or you'll get "sync" by default,
+        # which will cause of erratic behavior.
 
-            # Detect rising edge of framer `int` (inverted/normalized INT#) signal, feed to interrupt endpoint.
-            framer_int_usb = Signal()
-            m.d.usb += framer_int_usb.eq(microprocessor_bus.int)
-            framer_int_set_strobe = Rose(framer_int_usb, domain="usb")
+        # Detect rising edge of framer `int` (inverted/normalized INT#) signal, feed to interrupt endpoint.
+        framer_int_usb = Signal()
+        m.d.usb += framer_int_usb.eq(microprocessor_bus.int)
+        framer_int_set_strobe = Rose(framer_int_usb, domain="usb")
 
-            m.d.comb += interrupt_ep.event_set_strobe.eq(framer_int_set_strobe)
+        m.d.comb += interrupt_ep.event_set_strobe.eq(framer_int_set_strobe)
 
         ###############################################################
         # Framer miscellaneous pin config
