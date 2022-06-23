@@ -53,8 +53,6 @@ class MicroprocessorInterface(Elaboratable):
 		self.write   = Signal()
 		self.busy    = Signal()
 
-		self.cycles  = Signal(8)
-
 		# Using Intel uP asynchronous interface mode with ALE=1 (high), which removes ALE-related timing requirements.
 		# Timing from XRT86VX38 Framer/LIU hardware description.
 		# Figure 11 "Intel uP Interface Timing During Programmed I/O Read and Write Operations When ALE Is Tied 'HIGH'"
@@ -74,45 +72,25 @@ class MicroprocessorInterface(Elaboratable):
 		with m.FSM(domain="sync", reset="IDLE") as fsm:
 			with m.State("IDLE"):
 				with m.If(self.start):
+					# Datasheet indicates ADDR, CS#, and RD#/WR# can all be asserted
+					# at the same time, at the beginning of the operation. This is
+					# because Figure 11 shows t0, t1, and t3 all being minimum 0 ns.
 					m.d.sync += [
 						self.busy.eq(1),
+						self.bus.cs.eq(1),
 						self.bus.addr.eq(self.address),
-					]
-
-					m.next = 'CS-ASSERT'
-
-			with m.State("CS-ASSERT"):
-				m.d.sync += [
-					self.bus.cs.eq(1),
-					self.bus.data.o.eq(self.data_wr),
-					self.bus.data.oe.eq(self.write),
-					self.cycles.eq(20),
-				]
-
-				m.next = 'RD-WR-ASSERT'
-
-			with m.State('RD-WR-ASSERT'):
-				# It sounds like the RD or WR pulse needs to be >320 ns.
-				# I wish the datasheet were a bit more clear...
-				with m.If(self.cycles > 0):
-					m.d.sync += [
-						self.cycles.eq(self.cycles - 1),
-					]
-				with m.Else():
-					m.d.sync += [
 						self.bus.rd.eq(~self.write),
 						self.bus.wr.eq(self.write),
-						self.cycles.eq(20),
+						self.bus.data.o.eq(self.data_wr),
+						self.bus.data.oe.eq(self.write),
 					]
 
 					m.next = 'RDY-WAIT'
 
 			with m.State('RDY-WAIT'):
-				with m.If(self.cycles > 0):
-					m.d.sync += [
-						self.cycles.eq(self.cycles - 1),
-					]
-				with m.Elif(self.bus.rdy):
+				# RDY# should be deasserted at this point, let's wait for it to be
+				# asserted.
+				with m.If(self.bus.rdy):
 					m.d.sync += [
 						self.data_rd.eq(self.bus.data.i),
 						self.bus.cs.eq(0),
@@ -124,8 +102,9 @@ class MicroprocessorInterface(Elaboratable):
 					m.next = 'DONE-WAIT'
 
 			with m.State('DONE-WAIT'):
-				# TODO: There's certainly a minimum CS# deasserted period that isn't reflected in
-				# the datasheet...
+				# Since there's no specification for CS# deassert or DATA turn-around
+				# time, seems like a good plan to wait for RDY# to be deasserted before
+				# continuing.
 				with m.If(~self.bus.rdy):
 					m.d.sync += [
 						self.busy.eq(0),
