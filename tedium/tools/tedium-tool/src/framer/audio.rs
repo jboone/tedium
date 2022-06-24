@@ -422,6 +422,9 @@ pub fn pump_loopback() -> Result<(), PumpError> {
             }
         }).unwrap();
 
+    // The current thread will be the one that handles all USB transfer callbacks.
+    // So let's promote it to run more frequently and at a higher priority than
+    // usual.
     promote_current_thread_to_real_time(8, 8000).unwrap();
 
     loop {
