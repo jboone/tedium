@@ -61,8 +61,8 @@ class USBSignalInEndpointTedium(Elaboratable):
 
         self.status_read_complete = Signal()
 
-        # Pulse when event occurs.
-        self.event_set_strobe = Signal()
+        # Input: Event should be sent at the next opportunity.
+        self.event_pending = Signal()
 
     def elaborate(self, platform):
         m = Module()
@@ -113,19 +113,6 @@ class USBSignalInEndpointTedium(Elaboratable):
         targeting_endpoint       = endpoint_number_matches & tokenizer.is_in
         packet_requested         = targeting_endpoint & tokenizer.ready_for_response
 
-        # Event state
-
-        event_clear_strobe = Signal()
-        m.d.comb += event_clear_strobe.eq(self.status_read_complete)
-
-        event_pending = Signal(reset=0)
-        # Clear pending state when requested, but always set if there's a set strobe.
-        # m.d.usb += event_pending.eq((event_pending & ~event_clear_strobe) | self.event_set_strobe)
-        with m.If(self.event_set_strobe):
-            m.d.usb += event_pending.eq(1)
-        with m.Elif(event_clear_strobe):
-            m.d.usb += event_pending.eq(0)
-
         with m.FSM(domain="usb", reset="IDLE"):
 
             # IDLE -- we've not yet gotten an token requesting data. Wait for one.
@@ -133,10 +120,10 @@ class USBSignalInEndpointTedium(Elaboratable):
 
                 # Send a NAK if the event hasn't occured.
                 # packet_requested = (tokenizer.endpoint == self._endpoint_number) & tokenizer.is_in & tokenizer.ready_for_response
-                m.d.comb += handshakes_out.nak.eq(packet_requested & ~event_pending);
+                m.d.comb += handshakes_out.nak.eq(packet_requested & ~self.event_pending);
 
                 # Once we're ready to send a response...
-                with m.If(packet_requested & event_pending):
+                with m.If(packet_requested & self.event_pending):
 
                     m.d.usb += [
                         # ... clear our transmit counter ...
