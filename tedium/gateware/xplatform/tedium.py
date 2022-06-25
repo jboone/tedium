@@ -301,8 +301,8 @@ class TediumX8Platform(LatticeECP5Platform, LUNAPlatform):
 	default_usb_connection = "ulpi"
 
 	DEFAULT_CLOCK_FREQUENCIES_MHZ = {
-		"fast"  : 196.608,
-		"sync"  :  98.304,
+		"fast"  :  98.304,	# TODO: Set based on selected PLL mode.
+		"sync"  :  49.152,	# TODO: Set based on selected PLL mode.
 		"usb"   :  60.000,
 	}
 
