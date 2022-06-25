@@ -268,28 +268,12 @@ class TediumECP5DomainGenerator(Elaboratable):
 			)
 
 		m.d.comb += [
-			ResetSignal("fast"  ).eq(ResetSignal("sync")),
+			ResetSignal("fast").eq(ResetSignal("sync")),
 		]
 
 		m.submodules += ResetSynchronizer(~locked, domain="sync")
 		
 		return m
-
-	# def generate_usb_clock(self, m, platform):
-		# return self._clock_options[self.clock_frequencies['usb']]
-
-	# def generate_sync_clock(self, m, platform):
-	# 	return self._clock_options[self.clock_frequencies['sync']]
-
-	# def generate_fast_clock(self, m, platform):
-	# 	return self._clock_options[self.clock_frequencies['fast']]
-
-	# def generate_framer_clock(self, m, platform):
-	# 	return self._clock_options[self.clock_frequencies['framer']]
-
-	# def stretch_sync_strobe_to_usb(self, m, strobe, output=None, allow_delay=False):
-	# 	to_cycles = self.clock_frequencies['sync'] // self.clock_frequencies['usb']
-	# 	return stretch_strobe_signal(m, strobe, output=output, to_cycles=to_cycles, allow_delay=allow_delay)
 
 class TediumX8Platform(LatticeECP5Platform, LUNAPlatform):
 	name        = "Tedium X8"
