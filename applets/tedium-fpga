@@ -279,13 +279,11 @@ class Device(Elaboratable):
         framer_outputs_enable = Signal()
         m.d.comb += framer_outputs_enable.eq(microprocessor_request.framer_if_enable)
 
-        mclkin = platform.request("mclkin")
         txon = platform.request("txon")
         extosc8k = platform.request("extosc8k")
         rxtsel = platform.request("rxtsel")
 
         m.d.comb += [
-            mclkin.eq(ClockSignal("clkref")),
             txon.eq(framer_outputs_enable),		# 0x0FN2.TXON_n must still be set to 1 to enable driver.
             extosc8k.eq(0),
             rxtsel.eq(1),

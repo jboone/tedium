@@ -106,6 +106,10 @@ class TediumECP5DomainGenerator(Elaboratable):
 		clk_16m384 = platform.request(platform.default_clk)
 		reset = Const(0)
 
+		# Route 16.384MHz clock input back out to the framer.
+		mclkin = platform.request("mclkin")
+		m.d.comb += mclkin.eq(clk_16m384)
+
 		# Generate the clocks we need for our PLL.
 		feedback = Signal()
 		locked   = Signal()
