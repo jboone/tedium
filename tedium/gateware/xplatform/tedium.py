@@ -9,7 +9,7 @@
 import os
 import subprocess
 
-from amaranth import Signal, Module, ClockDomain, ClockSignal, Elaboratable, Instance, ResetSignal
+from amaranth import *
 
 from amaranth.build import *
 from amaranth.vendor.lattice_ecp5 import *
@@ -104,7 +104,7 @@ class TediumECP5DomainGenerator(Elaboratable):
 
 		# Grab our clock and global reset signals.
 		clk_16m384 = platform.request(platform.default_clk)
-		# reset      = platform.request(platform.default_rst)
+		reset = Const(0)
 
 		# Generate the clocks we need for our PLL.
 		feedback = Signal()
@@ -125,7 +125,7 @@ class TediumECP5DomainGenerator(Elaboratable):
 				i_CLKFB            = ClockSignal("fast"),
 
 				# Control signals.
-				i_RST              = 0,
+				i_RST              = reset,
 				i_STDBY            = 0,
 				# i_CLKINTFB         = 0,
 				i_PHASESEL0        = 0,
@@ -201,7 +201,7 @@ class TediumECP5DomainGenerator(Elaboratable):
 				o_CLKINTFB         = feedback,
 
 				# Control signals.
-				i_RST              = 0,
+				i_RST              = reset,
 				i_STDBY            = 0,
 				i_PHASESEL0        = 0,
 				i_PHASESEL1        = 0,
