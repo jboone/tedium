@@ -14,7 +14,7 @@ from amaranth import *
 from amaranth.build import *
 from amaranth.vendor.lattice_ecp5 import *
 
-#from amaranth.resources import *
+from amaranth_boards.resources import UARTResource
 
 from luna.gateware.platform.core import LUNAPlatform
 
@@ -320,6 +320,17 @@ class TediumX8Platform(LatticeECP5Platform, LUNAPlatform):
 		Resource("tp7",        0, Pins( "N1",  dir="o"),                  Attrs(IO_TYPE="LVCMOS33")),
 		Resource("tp9",        0, Pins( "P2",  dir="o"),                  Attrs(IO_TYPE="LVCMOS33")),
 		Resource("tp10",       0, Pins( "C4",  dir="o"),                  Attrs(IO_TYPE="LVCMOS33")),
+
+		# FTDI-attached UART
+
+		UARTResource(0,
+			rx="H4",
+			tx="V1",
+			rts="U1",
+			cts="T1",
+			role="dce",
+			attrs=Attrs(IO_TYPE="LVCMOS33", PULLMODE="UP"),
+		),
 
 		# Span 0
 
