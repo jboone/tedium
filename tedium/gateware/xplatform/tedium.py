@@ -100,7 +100,6 @@ class TediumECP5DomainGenerator(Elaboratable):
 		m.domains.fast   = ClockDomain()
 		m.domains.sync   = ClockDomain()
 		m.domains.usb    = ClockDomain()
-		m.domains.clkref = ClockDomain()
 
 		# Grab our clock and global reset signals.
 		clk_16m384 = platform.request(platform.default_clk)
@@ -264,7 +263,6 @@ class TediumECP5DomainGenerator(Elaboratable):
 			)
 
 		m.d.comb += [
-			ClockSignal("clkref" ).eq(clk_16m384),
 
 			ResetSignal("sync"  ).eq(~locked),
 			ResetSignal("fast"  ).eq(~locked),
@@ -306,7 +304,6 @@ class TediumX8Platform(LatticeECP5Platform, LUNAPlatform):
 		"fast"  : 196.608,
 		"sync"  :  98.304,
 		"usb"   :  60.000,
-		"clkref":  16.384,
 	}
 
 	resources = [
