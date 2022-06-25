@@ -12,6 +12,7 @@ import subprocess
 from amaranth import *
 
 from amaranth.build import *
+from amaranth.lib.cdc import ResetSynchronizer
 from amaranth.vendor.lattice_ecp5 import *
 
 from amaranth_boards.resources import UARTResource
@@ -263,12 +264,11 @@ class TediumECP5DomainGenerator(Elaboratable):
 			)
 
 		m.d.comb += [
-
-			ResetSignal("sync"  ).eq(~locked),
-			ResetSignal("fast"  ).eq(~locked),
-			# ResetSignal("framer").eq(0),
+			ResetSignal("fast"  ).eq(ResetSignal("sync")),
 		]
 
+		m.submodules += ResetSynchronizer(~locked, domain="sync")
+		
 		return m
 
 	# def generate_usb_clock(self, m, platform):
