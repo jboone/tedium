@@ -52,6 +52,7 @@ class MicroprocessorInterface(Elaboratable):
 		self.start   = Signal()
 		self.write   = Signal()
 		self.busy    = Signal()
+		self.done    = Signal()
 
 		self.cycles  = Signal(8)
 
@@ -70,6 +71,8 @@ class MicroprocessorInterface(Elaboratable):
 			self.bus.ptype2.eq(0),	# PTYPE1 is wired to ground/low/0.
 			self.bus.reset.eq(0),	# TODO: Wire to internal reset.
 		]
+
+		m.d.sync += self.done.eq(0)
 
 		with m.FSM(domain="sync", reset="IDLE") as fsm:
 			with m.State("IDLE"):
@@ -129,6 +132,7 @@ class MicroprocessorInterface(Elaboratable):
 				with m.If(~self.bus.rdy):
 					m.d.sync += [
 						self.busy.eq(0),
+						self.done.eq(1),
 					]
 
 					m.next = 'IDLE'
