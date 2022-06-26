@@ -103,7 +103,7 @@ class TediumECP5DomainGenerator(Elaboratable):
 		m.domains.usb    = ClockDomain()
 
 		# Grab our clock and global reset signals.
-		clk_16m384 = platform.request(platform.default_clk)
+		clk_16m384 = platform.request(platform.default_clk, dir="i")
 		reset = Const(0)
 
 		# Route 16.384MHz clock input back out to the framer.
