@@ -90,6 +90,14 @@ $ sudo udevadm control --reload-rules
 $ sudo udevadm trigger
 ```
 
+# Building and Downloading the Gateware
+
+__TODO__: These are notes from my temporary setup. Fill this out when everything stabilizes a bit.
+
+```bash
+PYTHONPATH=.:../amaranth:../amaranth-soc:./amaranth-stdio:../lambdasoc:../luna:../minerva python applets/tedium-fpga
+```
+
 # Framer/LIU Testing
 
 Upon loading the gateware into the FPGA, you'll need to reset the framer/LIU chip.
@@ -164,8 +172,7 @@ sudo udevadm trigger
 
 # Running Tests
 
-Tests can be run in root of tedium project or a subdirectory. Poetry will provide
-the correct module path info.
+Tests can be run in root of tedium project or a subdirectory. Poetry will provide the correct module path info.
 
 Specify `GENERATE_VCDS=1` if you want GTKwave project and waveform outputs from each test.
 
@@ -177,3 +184,7 @@ GENERATE_VCDS=1 poetry run python -m unittest tedium.gateware.test.test_enumerat
 # Or you can run LUNA tests.
 GENERATE_VCDS=1 poetry run python -m unittest luna.gateware.usb.usb2.descriptor
 ```
+
+# Running New Code on the Tedium SoC
+
+Be careful using the `lambdasoc` BIOS. The memory read/write/copy instructions default to parsing addresses as decimal unless you prefix with `0x`. And if you attempt to access an invalid address, the SoC (or at least the BIOS) hangs.

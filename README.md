@@ -6,6 +6,8 @@ TDM telephony experimentation
 
 * `oss-cad-suite`: open-source digital design and verification tools, with [nightly binary builds](https://github.com/YosysHQ/oss-cad-suite-build).
 * [`poetry`](https://python-poetry.org/): Python dependencies and packaging management tool.
+* `g++-riscv64-linux-gnu`
+* `rustup toolchain install stable -t riscv32i-unknown-none-elf`
 
 ## Installation
 
