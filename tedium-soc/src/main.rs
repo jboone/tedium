@@ -43,6 +43,7 @@ fn configure_channel<D: Xyz>(channel: &Channel<D>) -> Result<()> {
     )?;
 
     channel.fsr().write(|w| w
+        // Update RX RSAR and transmitted RBS only on superframe boundaries.
         .with_Signaling_update_on_Superframe_Boundaries(1)
         .with_Force_CRC_Errors(0)
         .with_J1_MODE(0)
@@ -195,7 +196,8 @@ fn configure_timeslot<D: Xyz>(timeslot: &Timeslot<D>) -> Result<()> {
     timeslot.rscr().write(|w| w
         .with_SIGC_ENB(0)
         .with_OH_ENB(0)
-        .with_DEB_ENB(0)
+        // Enable RBS debounce on this timeslot
+        .with_DEB_ENB(1)
         .with_RxSIGC(ReceiveSignalingConditioning::SixteenCode_ABCD)
         .with_RxSIGE(ReceiveSignalingExtraction::SixteenCode_ABCD)
     )?;
