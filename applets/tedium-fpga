@@ -328,11 +328,17 @@ class Device(Elaboratable):
         return m
 
 if __name__ == "__main__":
-    from tedium.gateware.xplatform.tedium import TediumX8Platform
-    platform = TediumX8Platform()
+    USE_LUNA = False
 
-    # Using `top_level_cli`, I don't get a build directory, which would be nice
-    # to peruse every once in a while.
-    # device = top_level_cli(Device)
+    if USE_LUNA:
+        from luna import top_level_cli
 
-    platform.build(Device(), do_program=True)
+        design = Device()
+        device = top_level_cli(design, cli_soc=design.soc)
+    else:
+        from tedium.gateware.xplatform.tedium import TediumX8Platform
+
+        platform = TediumX8Platform()
+        design = Device()
+        design.soc.build(build_dir="build/soc", do_init=True)
+        platform.build(design, build_dir="build/design", do_program=True)
