@@ -477,15 +477,53 @@ fn main() -> ! {
     }
 
     loop {
-        uart.write_str("BISR");
-
-        for channel in device.channels() {
+        let mut bisr_set = [BISR::new(); 8];
+        let mut irq = false;
+        for (i, channel) in device.channels().enumerate() {
             let v = channel.bisr().read().unwrap();
-            uart.write_char(Uart::SPACE);
-            uart.write_hex_u8(v.into());
+            bisr_set[i] = v;
+            let v: u8 = v.into();
+            irq |= (v != 0u8);
         }
-        uart.write_char(Uart::EOL);
 
-        delay.delay_ms(500u16);
+        if irq {
+            uart.write_str("BISR");
+
+            for (i, channel) in device.channels().enumerate() {
+                let bisr = bisr_set[i];
+
+                uart.write_char(Uart::SPACE);
+                uart.write_hex_u8(bisr.into());
+
+                if bisr.LBCODE() != 0 {
+                    let rlcisr = channel.rlcisr().read();
+                }
+
+                if bisr.HDLC() != 0 {
+                    let dlsr1 = channel.dlsr1().read();
+                    let dlsr2 = channel.dlsr2().read();
+                    let dlsr3 = channel.dlsr3().read();
+                
+                    let ss7sr1 = channel.ss7sr1().read();
+                    let ss7sr2 = channel.ss7sr2().read();
+                    let ss7sr3 = channel.ss7sr3().read();
+                }
+
+                if bisr.SLIP() != 0 {
+                    let sbisr = channel.sbisr().read();
+                }
+
+                if bisr.ALARM() != 0 {
+                    let aeisr = channel.aeisr().read();
+                    let exzsr = channel.exzsr().read();
+                    let ciasr = channel.ciasr().read();
+                }
+
+                if bisr.T1FRAME() != 0 {
+                    let fisr = channel.fisr().read();
+                }
+            }
+            uart.write_char(Uart::EOL);
+        }
     }
 }
