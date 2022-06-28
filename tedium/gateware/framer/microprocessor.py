@@ -71,7 +71,6 @@ class MicroprocessorInterface(Elaboratable):
 			self.bus.ack.eq(0b00),	# TODO: Implement DMA.
 			self.bus.ptype0.eq(0),	# PTYPE[2,0]: Configure interface for Intel uP interface mode.
 			self.bus.ptype2.eq(0),	# PTYPE1 is wired to ground/low/0.
-			self.bus.reset.eq(0),	# TODO: Wire to internal reset.
 		]
 
 		m.d.sync += self.done.eq(0)

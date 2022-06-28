@@ -40,7 +40,7 @@ def ULPIResource(*args, data, clk, dir, nxt, stp, rst=None,
 		io.append(attrs)
 	return Resource.family(*args, default_name="usb", ios=io)
 
-def MicroprocessorBusResource(name, addr_sites, data_sites, pclk_site, cs_site, ale_as_site, rd_ds_we_site, wr_rw_site, rdy_dtack_site, int_site, req_sites, ack_sites, ptype0_site, ptype2_site, reset_site):
+def MicroprocessorBusResource(name, addr_sites, data_sites, pclk_site, cs_site, ale_as_site, rd_ds_we_site, wr_rw_site, rdy_dtack_site, int_site, req_sites, ack_sites, ptype0_site, ptype2_site):
 	""" Generates a set of resource for the XRT86VX38 TDM LIU/framer microprocessor interface. """
 
 	# PTYPE1 is permanently grounded.
@@ -59,7 +59,6 @@ def MicroprocessorBusResource(name, addr_sites, data_sites, pclk_site, cs_site, 
 		Subsignal("ack",    PinsN(ack_sites,      dir="o" )),
 		Subsignal("ptype0", Pins (ptype0_site,    dir="o" )),
 		Subsignal("ptype2", Pins (ptype2_site,    dir="o" )),
-		Subsignal("reset",  PinsN(reset_site,     dir="o" )),
 		Attrs(IO_TYPE="LVCMOS33", SLEWRATE="SLOW", DRIVE="4"),
 	)
 
@@ -304,6 +303,7 @@ class TediumX8Platform(LatticeECP5Platform, LUNAPlatform):
 		Resource("extosc8k",   0, Pins( "M1",  dir="o"),                  Attrs(IO_TYPE="LVCMOS33")),
 		Resource("txon",       0, Pins( "L2",  dir="o"),                  Attrs(IO_TYPE="LVCMOS33")),
 		Resource("rxtsel",     0, Pins( "J19", dir="o"),                  Attrs(IO_TYPE="LVCMOS33")),
+		Resource("reset",      0, PinsN("L1",  dir="o"),                  Attrs(IO_TYPE="LVCMOS33", PULLMODE="UP")),
 
 		Resource("tp7",        0, Pins( "N1",  dir="o"),                  Attrs(IO_TYPE="LVCMOS33")),
 		Resource("tp9",        0, Pins( "P2",  dir="o"),                  Attrs(IO_TYPE="LVCMOS33")),
@@ -492,7 +492,6 @@ class TediumX8Platform(LatticeECP5Platform, LUNAPlatform):
 			ack_sites="A5 A6",
 			ptype0_site="D7",
 			ptype2_site="D12",
-			reset_site="L1",
 		)
 	]
 

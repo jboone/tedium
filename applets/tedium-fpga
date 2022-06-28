@@ -15,16 +15,14 @@ from luna.gateware.platform.core import LUNAPlatform
 from luna.usb2                      import USBDevice
 
 from usb_protocol.types             import USBRequestType, USBStandardRequests
+from tedium.gateware.controller.controller import SoC
 
 from tedium.gateware.usb.isochronous import USBIsochronousInEndpointTedium, USBIsochronousOutEndpointTedium
 from tedium.gateware.usb.descriptors_vendor import Descriptors
 from tedium.gateware.usb.handler_set_interface import SetInterfaceRequestHandler
-from tedium.gateware.usb.microprocessor_handler import FramerMicroprocessorBusVendorRequest
-from tedium.gateware.usb.status import USBSignalInEndpointTedium
 
 from tedium.gateware.framer.bit_timing import BitTiming
-from tedium.gateware.framer.microprocessor import MicroprocessorInterface
-from tedium.gateware.framer.paged_fifo import PagedAsyncFIFO, PagedFIFOWriteInterface
+from tedium.gateware.framer.paged_fifo import PagedAsyncFIFO
 from tedium.gateware.framer.report import Report
 from tedium.gateware.framer.rx_block import RxBlock
 from tedium.gateware.framer.rx_fifo_to_usb import RxFIFOToUSBInAdapter
@@ -174,6 +172,8 @@ def usb_framer(platform, m: Module, usb: USBDevice, ep_out: USBIsochronousOutEnd
         ]
 
 class Device(Elaboratable):
+    def __init__(self):
+        self.soc = SoC()
 
     def elaborate(self, platform: LUNAPlatform) -> Module:
         m = Module()
@@ -214,72 +214,17 @@ class Device(Elaboratable):
         ]
 
         ###############################################################
-        # Framer registers interface to USB
-
-        microprocessor_request = DomainRenamer("usb")(FramerMicroprocessorBusVendorRequest())
-        control_ep.add_request_handler(microprocessor_request)
-
-        microprocessor_bus = platform.request('microprocessor_bus')
-        microprocessor_if = m.submodules.microprocessor_if = DomainRenamer("usb")(MicroprocessorInterface(bus=microprocessor_bus))
-
-        m.d.comb += [
-            microprocessor_if.address.eq(microprocessor_request.address),
-            microprocessor_if.data_wr.eq(microprocessor_request.data_wr),
-            microprocessor_if.start.eq(microprocessor_request.start),
-            microprocessor_if.write.eq(microprocessor_request.write),
-            microprocessor_request.data_rd.eq(microprocessor_if.data_rd),
-            microprocessor_request.busy.eq(microprocessor_if.busy),
-        ]
-
-        ###############################################################
         # Framer interrupt
 
-        # Create an interrupt endpoint which will carry the value of our counter to the host
-        # each time our interrupt EP is polled.
-
-        interrupt_ep = USBSignalInEndpointTedium(
-            width=32,
-            endpoint_number=Descriptors.EndpointNumber.Interrupt,
-            endianness="big"
-        )
-        usb.add_endpoint(interrupt_ep)
-
-        # TODO: SEND SOMETHING USEFUL OVER THE INTERRUPT!        
-        m.d.comb += interrupt_ep.signal.eq(0x69696969)
-
-        # NOTE: WOW, WHAT A FOOT-GUN! Using Fell() or Rose(), don't forget
-        # to specify your clock domain, or you'll get "sync" by default,
-        # which will cause of erratic behavior.
-
-        """
-        The way this used to work, typically:
-
-        * Framer's interrupt active edge is detected.
-        * `event_pending` set to 1.
-        * USB host performs IN on endpoint, polling for "data" (non-zero length means there was an interrupt).
-        * When USB IN is over, `event_pending` is set to 0.
-        * Host reads some registers by control transfer, eventually causing the flag(s) that asserted the interrupt to clear, and the framer's interrupt signal to deassert.
-
-        However, at some point, we wound up with a stalled host, waiting for an interrupt that never comes.
-        I assume this is because the FPGA logic thinks the host is freshly notified of an interrupt, but the host
-        thinks it's cleared all interrupts and is waiting for the next notification from the FPGA.
-
-        Now, as a test, we're just generating an IN interrupt response (non-NAK) whenever the framer's INT# is asserted. And sure enough, it's been running for many hours
-        now, without a hitch, whereas before, it'd get stuck after a few minutes.
-
-        TODO: There is certainly a better way. Ideally, there'd be a little microcontroller handling the framer's microprocessor interface, catching and interpreting
-        interrupts, and sending them to the host in a more high-level form.
-        """
-        framer_int_usb = Signal()
-        m.d.usb += framer_int_usb.eq(microprocessor_bus.int)
-        m.d.comb += interrupt_ep.event_pending.eq(framer_int_usb)
+        soc = m.submodules.soc = DomainRenamer({"sync": "usb"})(self.soc)
+        usb.add_endpoint(soc.usb_in_ep_interrupt)
 
         ###############################################################
         # Framer miscellaneous pin config
 
         framer_outputs_enable = Signal()
-        m.d.comb += framer_outputs_enable.eq(microprocessor_request.framer_if_enable)
 
+        framer_reset = platform.request("reset")
         txon = platform.request("txon")
         extosc8k = platform.request("extosc8k")
         rxtsel = platform.request("rxtsel")
@@ -308,6 +253,19 @@ class Device(Elaboratable):
         usb_framer(platform, m, usb, usb_iso_out_ep, usb_iso_in_ep, framer_outputs_enable)
 
         ###############################################################
+        # System-on-Chip (SoC) microcontroller
+
+        uart_ftdi = platform.request("uart", 0)
+        m.d.comb += [
+            uart_ftdi.tx.o.eq(soc.uart_pins.tx.o),
+            soc.uart_pins.rx.i.eq(uart_ftdi.rx.i),
+            uart_ftdi.cts.o.eq(1),  # Just say it's always clear to send.
+
+            framer_outputs_enable.eq(soc.framer_control_pins.output_enable.o),
+            framer_reset.eq(soc.framer_control_pins.reset.o),
+        ]
+        
+        ###############################################################
         # Test Points
 
         # NOTE: LIU loop-back modes LIUCCR2.LOOP2_n:
@@ -320,9 +278,9 @@ class Device(Elaboratable):
         tp10 = platform.request("tp10") # FPGA C4, right of a ground pad near framer
 
         m.d.comb += [
-            tp9.eq( 0),
-            tp7.eq( 0),
-            tp10.eq(0),
+            tp9.eq( soc.tp_pins.tp9.o ),
+            tp7.eq( soc.tp_pins.tp7.o ),
+            tp10.eq(soc.tp_pins.tp10.o),
         ]
 
         return m
