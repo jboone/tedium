@@ -98,6 +98,12 @@ __TODO__: These are notes from my temporary setup. Fill this out when everything
 PYTHONPATH=.:../amaranth:../amaranth-soc:./amaranth-stdio:../lambdasoc:../luna:../minerva python applets/tedium-fpga
 ```
 
+To reload the gateware on the FPGA (because something crashed or it otherwise can't be negotiated with), this saves having to rebuild the whole bitstream:
+
+```bash
+$ openocd -f build/design/top-openocd.cfg -c 'init; svf -quiet build/design/top.svf; exit'
+```
+
 # Framer/LIU Testing
 
 Upon loading the gateware into the FPGA, you'll need to reset the framer/LIU chip.
