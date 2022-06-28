@@ -521,7 +521,7 @@ class TediumX8Platform(LatticeECP5Platform, LUNAPlatform):
 				as (config_filename, vector_filename):
 			subprocess.check_call([openocd,
 				"-f", config_filename,
-				"-c", "transport select jtag; init; svf -quiet {}; exit".format(vector_filename)
+				"-c", "init; svf -quiet {}; exit".format(vector_filename)
 			])
 
 # class TediumX8Platform(_TediumX8Platform, LUNAPlatform):
