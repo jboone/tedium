@@ -223,30 +223,22 @@ fn configure(device: &Device) -> Result<()> {
 }
 
 fn dump_registers<D: Xyz>(device: &D, uart: &Uart) {
-    const EOL: u8 = 0x0a;
-    const SPACE: u8 = 0x20;
-    const HEXCHAR: [u8; 16] = [0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66];
-
     for s in 0..1 {
         for r in 0x100..0x200 {
             let address = (s << 12) + r;
             if address & 15 == 0 {
-                uart.write_char(EOL);
-                uart.write_char(HEXCHAR[(address >> 12) & 15]);
-                uart.write_char(HEXCHAR[(address >>  8) & 15]);
-                uart.write_char(HEXCHAR[(address >>  4) & 15]);
-                uart.write_char(HEXCHAR[(address >>  0) & 15]);
+                uart.write_char(Uart::EOL);
+                uart.write_hex_u16(address);
             }
 
             // let v = r & 0xff;
-            let v = device.register_read(address as u16).unwrap() as usize;
+            let v = device.register_read(address as u16).unwrap();
 
-            uart.write_char(SPACE);
-            uart.write_char(HEXCHAR[(v >> 4) & 15]);
-            uart.write_char(HEXCHAR[(v >> 0) & 15]);
+            uart.write_char(Uart::SPACE);
+            uart.write_hex_u8(v as u8);
         }
 
-        uart.write_char(EOL);
+        uart.write_char(Uart::EOL);
     }
 }
 
