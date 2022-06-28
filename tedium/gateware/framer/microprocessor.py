@@ -56,6 +56,8 @@ class MicroprocessorInterface(Elaboratable):
 
 		self.cycles  = Signal(8)
 
+		self._wait_cycles = 20
+		
 		# Using Intel uP asynchronous interface mode with ALE=1 (high), which removes ALE-related timing requirements.
 		# Timing from XRT86VX38 Framer/LIU hardware description.
 		# Figure 11 "Intel uP Interface Timing During Programmed I/O Read and Write Operations When ALE Is Tied 'HIGH'"
@@ -89,7 +91,7 @@ class MicroprocessorInterface(Elaboratable):
 					self.bus.cs.eq(1),
 					self.bus.data.o.eq(self.data_wr),
 					self.bus.data.oe.eq(self.write),
-					self.cycles.eq(20),
+					self.cycles.eq(self._wait_cycles),
 				]
 
 				m.next = 'RD-WR-ASSERT'
@@ -105,7 +107,7 @@ class MicroprocessorInterface(Elaboratable):
 					m.d.sync += [
 						self.bus.rd.eq(~self.write),
 						self.bus.wr.eq(self.write),
-						self.cycles.eq(20),
+						self.cycles.eq(self._wait_cycles),
 					]
 
 					m.next = 'RDY-WAIT'
