@@ -455,6 +455,8 @@ fn main() -> ! {
     let mut delay = riscv::delay::McycleDelay::new(60000000);
     let uart = Uart::new(0x8000_0000);
 
+    uart.write_str("reset\n");
+
     framer_control.set_outputs_control(false);
     framer_control.set_reset(true);
 
@@ -465,6 +467,8 @@ fn main() -> ! {
     delay.delay_us(50u16);
 
     dump_registers(&device, &uart);
+
+    uart.write_str("configure\n");
 
     if configure(&device).is_err() {
         loop {}
