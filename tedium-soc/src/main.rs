@@ -7,146 +7,16 @@ use embedded_hal::prelude::*;
 // use riscv::register;
 use riscv_rt::entry;
 
-use xrt86vx38_pac::{self, device::{self, Result, DeviceAccess, RegisterAddress, RegisterValue, Xyz, Channel, Timeslot}};
+use xrt86vx38_pac::{self, device::{Result, Xyz, Channel, Timeslot}};
 use xrt86vx38_pac::register::*;
 
-struct Access {
-    p: u32,
-}
+mod framer;
+mod test_points;
+mod uart;
 
-impl Access {
-    fn new(p: u32) -> Self {
-        Self {
-            p,
-        }
-    }
-}
-
-impl DeviceAccess for Access {
-    fn read(&self, address: RegisterAddress) -> xrt86vx38_pac::device::Result<RegisterValue> {
-        unsafe {
-            let p = self.p as *const u32;
-            let p = p.offset(address as isize);
-            let v = p.read_volatile();
-            Ok(v as RegisterValue)
-        }
-    }
-
-    fn write(&self, address: RegisterAddress, value: RegisterValue) -> device::Result<()> {
-        unsafe {
-            let p = self.p as *mut u32;
-            let p = p.offset(address as isize);
-            p.write_volatile(value as u32);
-            Ok(())
-        }
-    }
-}
-
-type Device = xrt86vx38_pac::device::Device<Access>;
-
-struct TestPoints {
-    p: u32,
-    v: u32,
-}
-
-impl TestPoints {
-    fn new(p: u32) -> Self {
-        Self {
-            p,
-            v: 0,
-        }
-    }
-
-    fn toggle(&mut self, n: usize) {
-        self.v ^= 1 << n;
-        self.set_value(self.v);
-    }
-
-    fn set(&mut self, n: usize) {
-        self.v |= 1 << n;
-        self.set_value(self.v);
-    }
-
-    fn clear(&mut self, n: usize) {
-        self.v &= !(1 << n);
-        self.set_value(self.v);
-    }
-
-    fn set_value(&self, value: u32) {
-        unsafe {
-            let p = self.p as *mut u32;
-            let p = p.offset(0);
-            p.write_volatile(value);
-        }
-    }
-}
-
-struct FramerControl {
-    p: u32
-}
-
-impl FramerControl {
-    fn new(p: u32) -> Self {
-        Self {
-            p,
-        }
-    }
-
-    fn set_reset(&self, value: bool) {
-        unsafe {
-            let p = self.p as *mut u32;
-            let p = p.offset(0);
-            p.write_volatile(value as u32);
-        }
-    }
-
-    fn set_outputs_control(&self, value: bool) {
-        unsafe {
-            let p = self.p as *mut u32;
-            let p = p.offset(1);
-            p.write_volatile(value as u32);
-        }
-    }
-}
-
-struct Uart {
-    p: u32,
-}
-
-impl Uart {
-    fn new(p: u32) -> Self {
-        Self {
-            p,
-        }
-    }
-    
-    fn register_write(&self, n: u32, v: u32) {
-        unsafe {
-            let p = (self.p + n * 4) as *mut u32;
-            p.write_volatile(v);
-        }
-    }
-
-    fn register_read(&self, n: u32) -> u32 {
-        unsafe {
-            let p = (self.p + n * 4) as *mut u32;
-            p.read_volatile()
-        }
-    }
-
-    fn tx_data(&self, v: u32) {
-        self.register_write(4, v);
-    }
-
-    fn tx_rdy(&self) -> bool {
-        self.register_read(5) != 0
-    }
-
-    fn write_char(&self, c: u8) {
-        while !self.tx_rdy() {}
-        self.tx_data(c as u32);
-    }
-}
+use framer::{Device, Access, FramerControl};
+use test_points::TestPoints;
+use uart::Uart;
 
 fn configure_channel<D: Xyz>(channel: &Channel<D>) -> Result<()> {
     // THEORY?
