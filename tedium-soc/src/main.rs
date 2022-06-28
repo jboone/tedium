@@ -478,6 +478,8 @@ fn main() -> ! {
 
     dump_registers(&device, &uart);
 
+    let mut rsars = [[RSAR::new(); 24]; 8];
+
     for channel in device.channels() {
         enable_interrupts(&channel);
     }
@@ -491,6 +493,8 @@ fn main() -> ! {
             let v: u8 = v.into();
             irq |= (v != 0u8);
         }
+
+        let mut sig_change = false;
 
         if irq {
             uart.write_str("BISR");
@@ -526,10 +530,32 @@ fn main() -> ! {
                 }
 
                 if bisr.T1FRAME() != 0 {
-                    let fisr = channel.fisr().read();
+                    let fisr = channel.fisr().read().unwrap();
+                    sig_change |= fisr.SIG() != 0;
                 }
             }
             uart.write_char(Uart::EOL);
+        }
+
+        if sig_change {
+            for i in 0..8 {
+                let channel = device.channel(i);
+                for j in 0..24 {
+                    let v = channel.rsar(j).read().unwrap();
+                    if v != rsars[i][j] {
+                        uart.write_char(0x30 + i as u8);
+                        uart.write_char(46);
+                        uart.write_hex_u8(j as u8);
+                        uart.write_char(Uart::SPACE);
+                        uart.write_char(0x30 | v.A());
+                        uart.write_char(0x30 | v.B());
+                        uart.write_char(0x30 | v.C());
+                        uart.write_char(0x30 | v.D());
+                        uart.write_char(Uart::EOL);
+                    }
+                    rsars[i][j] = v;
+                }
+            }
         }
     }
 }
