@@ -87,7 +87,7 @@ class TxFrameReport(Report):
     def __init__(self):
         super().__init__(self.LAYOUT, name=self.__class__.__name__)
 
-def usb_framer(m: Module, usb: USBDevice, ep_out: USBIsochronousOutEndpointTedium, ep_in: USBIsochronousInEndpointTedium, output_enable: Signal):
+def usb_framer(platform, m: Module, usb: USBDevice, ep_out: USBIsochronousOutEndpointTedium, ep_in: USBIsochronousInEndpointTedium, output_enable: Signal):
     """
     Loop USB OUT data to USB IN through FIFOs connected via a timeslot interface.
     """
@@ -305,7 +305,7 @@ class Device(Elaboratable):
         )
         usb.add_endpoint(usb_iso_out_ep)
 
-        usb_framer(m, usb, usb_iso_out_ep, usb_iso_in_ep, framer_outputs_enable)
+        usb_framer(platform, m, usb, usb_iso_out_ep, usb_iso_in_ep, framer_outputs_enable)
 
         ###############################################################
         # Test Points
