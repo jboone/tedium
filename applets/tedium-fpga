@@ -10,6 +10,7 @@ from typing import List
 
 from amaranth                       import *
 from amaranth.hdl.ast               import Rose
+from luna.gateware.platform.core import LUNAPlatform
 
 from luna.usb2                      import USBDevice
 
@@ -174,7 +175,7 @@ def usb_framer(m: Module, usb: USBDevice, ep_out: USBIsochronousOutEndpointTediu
 
 class Device(Elaboratable):
 
-    def elaborate(self, platform):
+    def elaborate(self, platform: LUNAPlatform) -> Module:
         m = Module()
 
         m.submodules.car = platform.clock_domain_generator()
