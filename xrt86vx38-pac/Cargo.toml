@@ -1,0 +1,10 @@
+[package]
+name = "xrt86vx38-pac"
+version = "0.1.0"
+authors = ["Jared Boone <jboone@earfeast.com>"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+modular-bitfield-msb = "0.11"

@@ -1,6 +1,8 @@
 [workspace]
 
 members = [
+    "xrt86vx38-pac",
+    "tedium-soc",
     "tedium/tools/tedium-tool",
 ]
 

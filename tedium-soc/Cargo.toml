@@ -1,0 +1,23 @@
+[package]
+name = "tedium-soc"
+version = "0.1.0"
+authors = ["Jared Boone <jboone@earfeast.com>"]
+edition = "2021"
+
+[dependencies]
+embedded-hal = "0.2"
+panic-halt = "0.2"
+riscv = "0.8"
+riscv-rt = "0.8"
+xrt86vx38-pac = { path = "../xrt86vx38-pac" }
+
+# this lets you use `cargo fix`!
+[[bin]]
+name = "tedium-soc"
+test = false
+bench = false
+
+[profile.release]
+codegen-units = 1 # better optimizations
+debug = true # symbols are nice and they don't increase the size on Flash
+lto = true # better optimizations
