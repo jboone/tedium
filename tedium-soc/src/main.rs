@@ -636,15 +636,18 @@ fn main() -> ! {
                     for hdlc_index in 0..3 {
                         let dlsr = channel.dlsr(hdlc_index).read().unwrap();
                         usb_in_interrupt.write_fifo(dlsr.into());
+
                         if dlsr.RxEOT() != 0 { //&& dlsr.RxIDLE() != 0 {
                             let rdlbcr = channel.rdlbcr(hdlc_index).read().unwrap();
-                            let rdlbc = rdlbcr.RDLBC();
+                            usb_in_interrupt.write_fifo(rdlbcr.into());
+
                             let lapdbcr = match rdlbcr.RBUFPTR() {
                                 0 => channel.lapdbcr0(0),
                                 1 => channel.lapdbcr1(0),
                                 _ => unreachable!(),
                             };
-                            usb_in_interrupt.write_fifo(rdlbc);
+                            
+                            let rdlbc = rdlbcr.RDLBC();
                             for _ in 0..rdlbc {
                                 let v = lapdbcr.read().unwrap();
                                 usb_in_interrupt.write_fifo(v);

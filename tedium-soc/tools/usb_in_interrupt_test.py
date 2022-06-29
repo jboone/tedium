@@ -55,7 +55,8 @@ while True:
                 for i in range(3):
                     dlsr = r.read(1)[0]
                     if dlsr & 0x08: # RxEOT
-                        rdlbc = r.read(1)[0]
+                        rdlbcr = r.read(1)[0]
+                        rdlbc = rdlbcr & 0x7f
                         lapdbcr = r.read(rdlbc)
                         lapdbcr_s = format_bytes_hex(lapdbcr)
                         print(f"{channel} DLSR{i}={dlsr:02x} HDLC{i}=[{lapdbcr_s}]")
