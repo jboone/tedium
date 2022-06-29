@@ -130,7 +130,6 @@ fn main() -> Result<()> {
         Commands::Monitor(_) => {
             // monitor(&context, &device)?;
 
-            // if let Err(e) = framer::audio::pump3() {
             if let Err(e) = framer::audio::pump_loopback() {
                 eprintln!("error: audio pump: {:?}", e);
             }

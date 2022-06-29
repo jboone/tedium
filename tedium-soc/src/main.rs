@@ -786,7 +786,6 @@ fn main() -> ! {
                 if bisr.T1FRAME() != 0 {
                     let fisr = channel.fisr().read().unwrap();
                     usb_in_interrupt.write_fifo(fisr.into());
-                    // sigs |= ((fisr.SIG() != 0) as u8) << i;
                     if fisr.SIG() != 0 {
                         for n in (0..24).step_by(2) {
                             let h: u8 = channel.rsar(n+0).read().unwrap().into();
