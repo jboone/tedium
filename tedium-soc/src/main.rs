@@ -11,12 +11,15 @@ use xrt86vx38_pac::{self, device::{Result, Xyz, Channel, Timeslot}};
 use xrt86vx38_pac::register::*;
 
 mod framer;
+mod peripheral;
 mod test_points;
 mod uart;
+mod usb;
 
 use framer::{Device, Access, FramerControl};
 use test_points::TestPoints;
 use uart::Uart;
+use usb::{USBEndpointIn, USBEndpointOut};
 
 fn configure_channel<D: Xyz>(channel: &Channel<D>) -> Result<()> {
     // THEORY?
@@ -454,188 +457,6 @@ fn dump_registers<D: Xyz>(device: &D, uart: &Uart) {
         }
 
         uart.write_char(Uart::EOL);
-    }
-}
-
-struct Peripheral {
-    p: u32,
-}
-
-impl Peripheral {
-    fn new(p: u32) -> Self {
-        Self {
-            p,
-        }
-    }
-
-    fn address(&self, n: u32) -> u32 {
-        self.p + n * 4
-    }
-
-    fn register_read(&self, n: u32) -> u32 {
-        let p = self.address(n) as *const u32;
-        unsafe {
-            p.read_volatile()
-        }
-    }
-
-    fn register_write(&self, n: u32, v: u32) {
-        let p = self.address(n) as *mut u32;
-        unsafe {
-            p.write_volatile(v);
-        }
-    }
-}
-
-struct USBEndpointIn {
-    p: Peripheral,
-}
-
-impl USBEndpointIn {
-    fn new(p: u32) -> Self {
-        Self {
-            p: Peripheral::new(p),
-        }
-    }
-
-    fn write_fifo(&self, v: u8) {
-        self.p.register_write(0, v as u32);
-    }
-
-    fn transmit(&self, endpoint: u8) {
-        self.p.register_write(1, endpoint as u32);
-    }
-
-    fn reset(&self) {
-        self.p.register_write(2, 1);
-    }
-
-    fn set_stall(&self) {
-        self.p.register_write(3, 1);
-    }
-
-    fn clear_stall(&self) {
-        self.p.register_write(3, 0);
-    }
-
-    fn is_idle(&self) -> bool {
-        self.p.register_read(4) != 0
-    }
-
-    fn is_fifo_empty(&self) -> bool {
-        self.p.register_read(5) == 0
-    }
-
-    fn is_interrupt_pending(&self) -> bool {
-        self.p.register_read(6) != 0
-    }
-
-    fn get_pid(&self) -> u8 {
-        self.p.register_read(7) as u8
-    }
-
-    fn set_pid(&self, pid: u8) {
-        self.p.register_write(7, pid as u32);
-    }
-}
-
-struct USBEndpointOut {
-    p: Peripheral,
-}
-
-impl USBEndpointOut {
-    fn new(p: u32) -> Self {
-        Self {
-            p: Peripheral::new(p),
-        }
-    }
-
-    fn get_data(&self) -> u8 {
-        self.p.register_read(0) as u8
-    }
-
-    fn get_data_ep(&self) -> u8 {
-        self.p.register_read(1) as u8
-    }
-
-    fn reset(&self) {
-        self.p.register_write(2, 1);
-    }
-
-    fn get_epno(&self) -> u8 {
-        self.p.register_read(3) as u8
-    }
-
-    fn set_epno(&self, v: u8) {
-        self.p.register_write(3, v as u32);
-    }
-
-    fn get_enable(&self) -> u8 {
-        self.p.register_read(4) as u8
-    }
-
-    fn set_enable(&self, v: u8) {
-        self.p.register_write(4, v as u32);
-    }
-
-    fn set_prime(&self, v: u8) {
-        self.p.register_write(5, v as u32);
-    }
-
-    fn get_stall(&self) -> u8 {
-        self.p.register_read(6) as u8
-    }
-
-    fn set_stall(&self, v: u8) {
-        self.p.register_write(6, v as u32);
-    }
-
-    fn get_have(&self) -> u8 {
-        self.p.register_read(7) as u8
-    }
-
-    fn set_have(&self, v: u8) {
-        self.p.register_write(7, v as u32);
-    }
-
-    fn get_pend(&self) -> u8 {
-        self.p.register_read(8) as u8
-    }
-
-    fn set_pend(&self, v: u8) {
-        self.p.register_write(8, v as u32);
-    }
-
-    fn get_pid(&self) -> u8 {
-        self.p.register_read(9) as u8
-    }
-
-    fn set_pid(&self, v: u8) {
-        self.p.register_write(9, v as u32);
-    }
-
-    fn set_owner(&self, v: u8) {
-        self.p.register_write(10, v as u32);
-    }
-
-    fn get_ev_status(&self) -> u32 {
-        self.p.register_read(11)
-    }
-
-    fn get_ev_pending(&self) -> u32 {
-        self.p.register_read(12)
-    }
-
-    fn set_ev_pending(&self, v: u32) {
-        self.p.register_write(12, v);
-    }
-
-    fn get_ev_enable(&self) -> u32 {
-        self.p.register_read(13)
-    }
-
-    fn set_ev_enable(&self, v: u32) {
-        self.p.register_write(13, v);
     }
 }
 
