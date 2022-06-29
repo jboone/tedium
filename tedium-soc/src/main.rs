@@ -457,6 +457,89 @@ fn dump_registers<D: Xyz>(device: &D, uart: &Uart) {
     }
 }
 
+struct Peripheral {
+    p: u32,
+}
+
+impl Peripheral {
+    fn new(p: u32) -> Self {
+        Self {
+            p,
+        }
+    }
+
+    fn address(&self, n: u32) -> u32 {
+        self.p + n * 4
+    }
+
+    fn register_read(&self, n: u32) -> u32 {
+        let p = self.address(n) as *const u32;
+        unsafe {
+            p.read_volatile()
+        }
+    }
+
+    fn register_write(&self, n: u32, v: u32) {
+        let p = self.address(n) as *mut u32;
+        unsafe {
+            p.write_volatile(v);
+        }
+    }
+}
+
+struct USBEndpointIn {
+    p: Peripheral,
+}
+
+impl USBEndpointIn {
+    fn new(p: u32) -> Self {
+        Self {
+            p: Peripheral::new(p),
+        }
+    }
+
+    fn write_fifo(&self, v: u8) {
+        self.p.register_write(0, v as u32);
+    }
+
+    fn transmit(&self, endpoint: u8) {
+        self.p.register_write(1, endpoint as u32);
+    }
+
+    fn reset(&self) {
+        self.p.register_write(2, 1);
+    }
+
+    fn set_stall(&self) {
+        self.p.register_write(3, 1);
+    }
+
+    fn clear_stall(&self) {
+        self.p.register_write(3, 0);
+    }
+
+    fn is_idle(&self) -> bool {
+        self.p.register_read(4) != 0
+    }
+
+    fn is_fifo_empty(&self) -> bool {
+        self.p.register_read(5) == 0
+    }
+
+    fn is_interrupt_pending(&self) -> bool {
+        self.p.register_read(6) != 0
+    }
+
+    fn get_pid(&self) -> u8 {
+        self.p.register_read(7) as u8
+    }
+
+    fn set_pid(&self, pid: u8) {
+        self.p.register_write(7, pid as u32);
+    }
+}
+
+
 #[entry]
 fn main() -> ! {
     let mut test_points = TestPoints::new(0x8000_2000);
@@ -464,6 +547,7 @@ fn main() -> ! {
     let device = Device::new(Access::new(0x8010_0000));
     let mut delay = riscv::delay::McycleDelay::new(60000000);
     let uart = Uart::new(0x8000_0000);
+    let usb_in_interrupt = USBEndpointIn::new(0x8009_0000);
 
     uart.write_str("reset\n");
 
@@ -488,82 +572,118 @@ fn main() -> ! {
 
     dump_registers(&device, &uart);
 
-    let mut rsars = [[RSAR::new(); 24]; 8];
-
     for channel in device.channels() {
         enable_interrupts(&channel);
     }
 
+    // Set true to mimic all interrupt types being asserted,
+    // thereby sending all the current interrupt state and clearing
+    // all pending interrupts.
+    let mut resync = true;
+    let mut resync_count = 0;
+
     loop {
-        let mut bisr_set = [BISR::new(); 8];
-        let mut irq = false;
-        for (i, channel) in device.channels().enumerate() {
-            let v = channel.bisr().read().unwrap();
-            bisr_set[i] = v;
-            let v: u8 = v.into();
-            irq |= (v != 0u8);
-        }
+        for (channel_index, channel) in device.channels().enumerate() {
+            // Don't bother reading interrupt status until we can do something
+            // about it -- meaning the USB endpoint is idle and we can transmit
+            // data to the host.
 
-        let mut sig_change = false;
+            loop {
+                if usb_in_interrupt.is_idle() {
+                    break;
+                }
+            }
 
-        if irq {
-            uart.write_str("BISR");
+            usb_in_interrupt.clear_stall();
 
-            for (i, channel) in device.channels().enumerate() {
-                let bisr = bisr_set[i];
+            test_points.toggle(0);
+            if channel_index == 0 {
+                test_points.toggle(2);
+            }
 
-                uart.write_char(Uart::SPACE);
-                uart.write_hex_u8(bisr.into());
+            let bisr = if resync {
+                BISR::new()
+                    .with_LBCODE(1)
+                    .with_HDLC(1)
+                    .with_SLIP(1)
+                    .with_ALARM(1)
+                    .with_T1FRAME(1)
+            } else {
+                channel.bisr().read().unwrap()
+            };
+            let bisr_u8: u8 = bisr.into();
+
+            // Ignore the ONESEC interrupt, which apparently we can't shut off.
+            if bisr_u8 & 0b01101111u8 != 0 {
+                usb_in_interrupt.write_fifo(channel_index as u8);
+                usb_in_interrupt.write_fifo(bisr_u8);
 
                 if bisr.LBCODE() != 0 {
-                    let rlcisr = channel.rlcisr().read();
+                    let rlcisr = channel.rlcisr().read().unwrap();
+                    usb_in_interrupt.write_fifo(rlcisr.into());
                 }
 
                 if bisr.HDLC() != 0 {
-                    let dlsr1 = channel.dlsr1().read();
-                    let dlsr2 = channel.dlsr2().read();
-                    let dlsr3 = channel.dlsr3().read();
-                
-                    let ss7sr1 = channel.ss7sr1().read();
-                    let ss7sr2 = channel.ss7sr2().read();
-                    let ss7sr3 = channel.ss7sr3().read();
+                    for hdlc_index in 0..3 {
+                        let dlsr = channel.dlsr(hdlc_index).read().unwrap();
+                        usb_in_interrupt.write_fifo(dlsr.into());
+                        if dlsr.RxEOT() != 0 { //&& dlsr.RxIDLE() != 0 {
+                            let rdlbcr = channel.rdlbcr(hdlc_index).read().unwrap();
+                            let rdlbc = rdlbcr.RDLBC();
+                            let lapdbcr = match rdlbcr.RBUFPTR() {
+                                0 => channel.lapdbcr0(0),
+                                1 => channel.lapdbcr1(0),
+                                _ => unreachable!(),
+                            };
+                            usb_in_interrupt.write_fifo(rdlbc);
+                            for _ in 0..rdlbc {
+                                let v = lapdbcr.read().unwrap();
+                                usb_in_interrupt.write_fifo(v);
+                            }
+                        }
+
+                        let _ = channel.ss7sr(hdlc_index).read();
+                    }
                 }
 
                 if bisr.SLIP() != 0 {
-                    let sbisr = channel.sbisr().read();
+                    let sbisr = channel.sbisr().read().unwrap();
+                    usb_in_interrupt.write_fifo(sbisr.into());
                 }
 
                 if bisr.ALARM() != 0 {
-                    let aeisr = channel.aeisr().read();
-                    let exzsr = channel.exzsr().read();
-                    let ciasr = channel.ciasr().read();
+                    let aeisr = channel.aeisr().read().unwrap();
+                    usb_in_interrupt.write_fifo(aeisr.into());
+                    let exzsr = channel.exzsr().read().unwrap();
+                    usb_in_interrupt.write_fifo(exzsr.into());
+                    let ciasr = channel.ciasr().read().unwrap();
+                    usb_in_interrupt.write_fifo(ciasr.into());
                 }
 
                 if bisr.T1FRAME() != 0 {
                     let fisr = channel.fisr().read().unwrap();
-                    sig_change |= fisr.SIG() != 0;
+                    usb_in_interrupt.write_fifo(fisr.into());
+                    // sigs |= ((fisr.SIG() != 0) as u8) << i;
+                    if fisr.SIG() != 0 {
+                        for n in (0..24).step_by(2) {
+                            let h: u8 = channel.rsar(n+0).read().unwrap().into();
+                            let l: u8 = channel.rsar(n+1).read().unwrap().into();
+                            let v = (h << 4) | (l & 0xf);
+                            usb_in_interrupt.write_fifo(v);
+                        }
+                    }
                 }
             }
-            uart.write_char(Uart::EOL);
-        }
 
-        if sig_change {
-            for i in 0..8 {
-                let channel = device.channel(i);
-                for j in 0..24 {
-                    let v = channel.rsar(j).read().unwrap();
-                    if v != rsars[i][j] {
-                        uart.write_char(0x30 + i as u8);
-                        uart.write_char(46);
-                        uart.write_hex_u8(j as u8);
-                        uart.write_char(Uart::SPACE);
-                        uart.write_char(0x30 | v.A());
-                        uart.write_char(0x30 | v.B());
-                        uart.write_char(0x30 | v.C());
-                        uart.write_char(0x30 | v.D());
-                        uart.write_char(Uart::EOL);
-                    }
-                    rsars[i][j] = v;
+            usb_in_interrupt.transmit(2);
+
+            if channel_index == 7 {
+                resync_count += 1;
+                if resync_count == 10000 {
+                    resync_count = 0;
+                    resync = true;
+                } else {
+                    resync = false;
                 }
             }
         }

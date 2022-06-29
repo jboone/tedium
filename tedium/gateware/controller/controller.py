@@ -15,6 +15,7 @@ from lambdasoc.soc.cpu import CPUSoC
 from luna.gateware.usb.usb2.interfaces.eptri import InFIFOInterface
 
 from tedium.gateware.framer.microprocessor import MicroprocessorInterface
+from tedium.gateware.usb.descriptors_vendor import Descriptors
 
 class TestPointPeripheral(Peripheral, Elaboratable):
     def __init__(self, pins):
@@ -255,7 +256,7 @@ class SoC(CPUSoC, Elaboratable):
         # self.usb_in_ep_0 = InFIFOInterface(endpoint_number=0, max_packet_size=64)
         # self.add_peripheral(self.usb_in_ep_0, as_submodule=False, addr=self.USB_IN_EP0_ADDRESS)
 
-        self.usb_in_ep_interrupt = InFIFOInterface(endpoint_number=2, max_packet_size=64)
+        self.usb_in_ep_interrupt = InFIFOInterface(endpoint_number=2, max_packet_size=Descriptors.INTERRUPT_BYTES_MAX)
         self.add_peripheral(self.usb_in_ep_interrupt, as_submodule=False, addr=self.USB_IN_INT_ADDRESS)
 
         # self.usb_out_ep = OutFIFOInterface()

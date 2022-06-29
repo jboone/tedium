@@ -25,7 +25,7 @@ class Descriptors:
     FRAME_STREAM_ADDITIONAL_PACKETS_PER_INTERVAL = 0
     FRAME_STREAM_INTERVAL = 1   # 2^(bInterval-1) microframes = every 1 microframe.
 
-    INTERRUPT_BYTES_MAX = 64
+    INTERRUPT_BYTES_MAX = 256
     INTERRUPT_INTERVAL = 4      # 2^(bInterval-1) microframes = every 8 microframes.
 
     def create_descriptors(self):
