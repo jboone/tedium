@@ -8,7 +8,7 @@ use std::thread;
 use crate::codec::ulaw;
 use crate::detector::{dtmf, Detector};
 use crate::framer::device::open_device;
-use crate::framer::usb::{InterfaceNumber, AlternateSetting, EndpointNumber, Transfer, TransferHandler};
+use crate::framer::usb::{InterfaceNumber, AlternateSetting, EndpointNumber, Transfer, CallbackIn, CallbackInWrapper, CallbackOut, CallbackOutWrapper};
 use crate::generator::ToneGenerator;
 use crate::generator::dual_tone::DualToneGenerator;
 
@@ -332,50 +332,6 @@ pub fn pump_loopback() -> Result<(), PumpError> {
     }
 
     // Ok(())
-}
-
-trait CallbackIn {
-    fn callback_in(&mut self, transfer: *mut ffi::libusb_transfer);
-}
-
-struct CallbackInWrapper<T> {
-    handler: Arc<Mutex<T>>,
-}
-
-impl<T> CallbackInWrapper<T> {
-    fn new(handler: Arc<Mutex<T>>) -> Self {
-        Self {
-            handler,
-        }
-    }
-}
-
-impl<T: CallbackIn> TransferHandler for CallbackInWrapper<T> {
-    fn callback(&self, transfer: *mut ffi::libusb_transfer) {
-        self.handler.lock().unwrap().callback_in(transfer);
-    }
-}
-
-trait CallbackOut {
-    fn callback_out(&mut self, transfer: *mut ffi::libusb_transfer);
-}
-
-struct CallbackOutWrapper<T> {
-    handler: Arc<Mutex<T>>,
-}
-
-impl<T> CallbackOutWrapper<T> {
-    fn new(handler: Arc<Mutex<T>>) -> Self {
-        Self {
-            handler,
-        }
-    }
-}
-
-impl<T: CallbackOut> TransferHandler for CallbackOutWrapper<T> {
-    fn callback(&self, transfer: *mut ffi::libusb_transfer) {
-        self.handler.lock().unwrap().callback_out(transfer);
-    }
 }
 
 #[derive(Copy, Clone, Debug)]

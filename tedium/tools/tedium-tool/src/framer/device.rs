@@ -1,13 +1,16 @@
 #![allow(non_snake_case)]
 
-use std::{time::Duration, marker::PhantomData, os::raw::c_int, fmt};
+use std::{time::Duration, marker::PhantomData, fmt, sync::{Mutex, Arc}};
 
-use crossbeam::channel::Sender;
-use rusb::{self, UsbContext, constants::{LIBUSB_ENDPOINT_IN, LIBUSB_ENDPOINT_DIR_MASK}, Error};
+use crossbeam::channel::{Sender, unbounded};
+use rusb::{self, UsbContext, constants::{LIBUSB_ENDPOINT_IN, LIBUSB_TRANSFER_COMPLETED}, Error};
+use rusb::ffi;
 
-use crate::framer::usb::EndpointNumber;
+use crate::framer::usb::{EndpointNumber, InterfaceNumber, Transfer, INTERRUPT_BYTES_MAX, from_libusb, CallbackWrapper};
 
-use super::register::*;
+use crate::framer::register::*;
+
+use super::usb::TransferHandler;
 
 pub(crate) type RegisterAddress = u16;
 pub(crate) type RegisterValue = u8;
@@ -464,183 +467,101 @@ impl<'a> Iterator for Channels<'a> {
 }
 
 ///////////////////////////////////////////////////////////////////////
-// Experimental USB Async Thing
 
-use rusb::ffi::libusb_transfer;
-
-// TODO: Borrowed from rusb::ffi, because it's pub(crate).
-#[doc(hidden)]
-pub(crate) fn from_libusb(err: i32) -> rusb::Error {
-    use rusb::ffi::constants::*;
-
-    match err {
-        LIBUSB_ERROR_IO => Error::Io,
-        LIBUSB_ERROR_INVALID_PARAM => Error::InvalidParam,
-        LIBUSB_ERROR_ACCESS => Error::Access,
-        LIBUSB_ERROR_NO_DEVICE => Error::NoDevice,
-        LIBUSB_ERROR_NOT_FOUND => Error::NotFound,
-        LIBUSB_ERROR_BUSY => Error::Busy,
-        LIBUSB_ERROR_TIMEOUT => Error::Timeout,
-        LIBUSB_ERROR_OVERFLOW => Error::Overflow,
-        LIBUSB_ERROR_PIPE => Error::Pipe,
-        LIBUSB_ERROR_INTERRUPTED => Error::Interrupted,
-        LIBUSB_ERROR_NO_MEM => Error::NoMem,
-        LIBUSB_ERROR_NOT_SUPPORTED => Error::NotSupported,
-        LIBUSB_ERROR_OTHER | _ => Error::Other,
-    }
+struct FramerInterruptHandler {
+    sender: Sender<FramerInterruptMessage>,
 }
 
-// struct CallbackData<T: UsbContext> {
-struct CallbackData {
-    // context: T,
-    sender: Sender<AsyncThingMessage>,
-}
-
-pub extern "system" fn async_thing_callback(
-    transfer: *mut libusb_transfer,
-) {
-    use rusb::ffi::constants::*;
-
-    let status = unsafe { (*transfer).status };
-
-    let result = unsafe {
-        use rusb::ffi::*;
-
-        libusb_submit_transfer(transfer)
-    };
-
-    match status {
-        LIBUSB_TRANSFER_COMPLETED => {},
-        LIBUSB_TRANSFER_TIMED_OUT => {},
-        _ => {
-            let s = match status {
-                LIBUSB_TRANSFER_COMPLETED => "completed",
-                LIBUSB_TRANSFER_ERROR => "error",
-                LIBUSB_TRANSFER_TIMED_OUT => "timed out",
-                LIBUSB_TRANSFER_CANCELLED => "cancelled",
-                LIBUSB_TRANSFER_STALL => "stall",
-                LIBUSB_TRANSFER_NO_DEVICE => "no device",
-                LIBUSB_TRANSFER_OVERFLOW => "overflow",
-                n => "???",
-            };
-        
-            println!("callback: {s}");
+impl FramerInterruptHandler {
+    fn new(sender: Sender<FramerInterruptMessage>) -> Self {
+        Self {
+            sender,
         }
     }
+}
 
-    if result != 0 {
-        eprintln!("error: libusb_submit_transfer: {:?}", result);
-    }
+impl TransferHandler for FramerInterruptHandler {
+    fn callback(&self, transfer: *mut ffi::libusb_transfer) {
+        let status = unsafe { (*transfer).status };
+        let actual_length = unsafe { (*transfer).actual_length };
 
-    if status == LIBUSB_TRANSFER_COMPLETED {
-        let data = unsafe { &mut *((*transfer).user_data as *mut CallbackData) };
-        if let Err(e) = data.sender.send(AsyncThingMessage::Interrupt) {
-            eprint!("error: data.sender.send: {:?}", e);
+        let result = unsafe {
+            ffi::libusb_submit_transfer(transfer)
+        };
+        match result {
+            LIBUSB_SUCCESS => {},
+            e => eprintln!("IN: libusb_submit_transfer error: {e}"),
+        }
+
+        // TODO: This gets called back even when the device endpoint
+        // reports a zero-length packet. Is there a better way, one which
+        // doesn't trouble the host with 1,000 packets a second, the vast
+        // majority of which require no work on the host's part?
+        if status == LIBUSB_TRANSFER_COMPLETED && actual_length > 0 {
+            if let Err(e) = self.sender.send(FramerInterruptMessage::Interrupt) {
+                eprint!("error: data.sender.send: {:?}", e);
+            }
         }
     }
 }
 
 #[derive(Copy, Clone, Debug)]
-pub enum AsyncThingMessage {
+pub enum FramerInterruptMessage {
     Interrupt,
 }
 
-pub struct AsyncThing {
+pub struct FramerInterruptThread {
     endpoint_address: u8,
 }
 
-impl AsyncThing {
-    // pub fn illegal_bagel(&self, timeout: Duration) -> Result<usize> {
-    //     let endpoint = self.interrupt_endpoint_address;
-    //     if endpoint & LIBUSB_ENDPOINT_DIR_MASK != LIBUSB_ENDPOINT_IN {
-    //         return Err(Error::InvalidParam);
-    //     }
-    //     let dev_handle = &self.handle;
-    //     let mut buf = [0; 4];
-    //     let mut transferred = mem::MaybeUninit::<c_int>::uninit();
-    //     unsafe {
-    //         match libusb_interrupt_transfer(
-    //             dev_handle.as_raw(),
-    //             endpoint,
-    //             buf.as_mut_ptr() as *mut c_uchar,
-    //             buf.len() as c_int,
-    //             transferred.as_mut_ptr(),
-    //             timeout.as_millis() as c_uint,
-    //         ) {
-    //             0 => Ok(transferred.assume_init() as usize),
-    //             err if err == LIBUSB_ERROR_INTERRUPTED => {
-    //                 let transferred = transferred.assume_init();
-    //                 if transferred > 0 {
-    //                     Ok(transferred as usize)
-    //                 } else {
-    //                     Err(from_libusb(err))
-    //                 }
-    //             }
-    //             err => Err(from_libusb(err)),
-    //         }
-    //     }
-    // }
+impl FramerInterruptThread {
+    pub fn run(sender: Sender<FramerInterruptMessage>) -> Result<()> {
+        let mut context = rusb::Context::new()?;
 
-    pub fn run(context: &mut rusb::Context, sender: Sender<AsyncThingMessage>) -> Result<()> {        
-    // pub fn run(handle: &rusb::DeviceHandle<rusb::Context>, sender: Sender<AsyncThingMessage>) -> Result<()> {        
-        let mut handle = open_device(context)?;
+        let mut device = open_device(&mut context)?;
 
         let endpoint = LIBUSB_ENDPOINT_IN | EndpointNumber::Interrupt as u8;
-        if endpoint & LIBUSB_ENDPOINT_DIR_MASK != LIBUSB_ENDPOINT_IN {
-            return Err(Error::InvalidParam);
+
+        device.claim_interface(InterfaceNumber::Interrupt as u8)?;
+        device.set_alternate_setting(InterfaceNumber::Interrupt as u8, 0)?;
+
+        let device = Arc::new(device);
+
+        let device_handle = &device;
+
+        const TRANSFERS_COUNT: usize = 4;
+
+        let mut transfers: Vec<Transfer> = Vec::new();
+        
+        let handler = Arc::new(Mutex::new(FramerInterruptHandler::new(sender)));
+        
+        for i in 0..TRANSFERS_COUNT {
+            let transfer = Transfer::new_interrupt_transfer(
+                device_handle.clone(),
+                LIBUSB_ENDPOINT_IN | EndpointNumber::Interrupt as u8,
+                INTERRUPT_BYTES_MAX,
+                0,
+                Box::new(CallbackWrapper::new(handler.clone())),
+            );
+
+            transfer.submit();
+            transfers.push(transfer);
         }
 
-        handle.claim_interface(0)?;
+        let context = device.context();
 
-        let mut callback_data = Box::new(CallbackData {
-            // context: context.borrow().clone(),
-            sender,
-        });
-
-        let dev_handle = &handle;
-        let mut buffer = Box::<[u8; 4]>::new([0; 4]);
-
-        // NOTE: EVIL HACK, I'M SHARING BUFFERS BETWEEN TRANSFERS.
-
-        unsafe {
-            use rusb::ffi::*;
-
-            let user_data = &mut *callback_data as *mut _ as *mut _;
-            println!("user_data={:?}", user_data);
-
-            for i in 0..4 {
-                let transfer = libusb_alloc_transfer(0);
-                libusb_fill_interrupt_transfer(
-                    transfer,
-                    dev_handle.as_raw(),
-                    endpoint,
-                    buffer.as_mut_ptr(),
-                    buffer.len() as c_int,
-                    async_thing_callback,
-                    user_data,
-                    2500
-                );
-                let result = libusb_submit_transfer(transfer);
-                if result != 0 {
-                    eprintln!("error: libusb_submit_transfer: {:?}", result);
-                }
-            }
-        }
-
-        let context = handle.context();
-
-        println!("waiting for events");
         loop {
-            if let Err(e) = context.handle_events(None) {
-                eprintln!("error: context.handle_Events: {:?}", e);
-                break;
+            let result = unsafe {
+                ffi::libusb_handle_events(context.as_raw())
+            };
+            if result != 0 {
+                eprintln!("error: libusb_handle_events: {:?}", result);
+                // TODO: I wish I could return an official rusb::Error here,
+                // but the function that turns a raw i32 result into an Error
+                // is private to the rusb crate.
+                return Err(from_libusb(result));
             }
         }
-
-        // TODO: Clean up!
-        // TODO: Return error!
-
-        Ok(())
     }
 }
 

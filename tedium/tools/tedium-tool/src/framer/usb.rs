@@ -1,7 +1,7 @@
-use std::{sync::Arc, ptr::NonNull};
+use std::{sync::{Arc, Mutex}, ptr::NonNull};
 
 use libc::c_uint;
-use rusb::{ffi, UsbContext, DeviceHandle};
+use rusb::{ffi, Error, UsbContext, DeviceHandle};
 
 // TODO: Keep synchronized with `gateware/descriptors_vendor.py`.
 #[derive(Copy, Clone, Debug)]
@@ -27,6 +27,31 @@ pub(crate) enum EndpointNumber {
     Interrupt = 2,
 }
 
+// TODO: Borrowed from rusb::ffi, because it's pub(crate).
+#[doc(hidden)]
+pub fn from_libusb(err: i32) -> rusb::Error {
+    use rusb::ffi::constants::*;
+
+    match err {
+        LIBUSB_ERROR_IO => Error::Io,
+        LIBUSB_ERROR_INVALID_PARAM => Error::InvalidParam,
+        LIBUSB_ERROR_ACCESS => Error::Access,
+        LIBUSB_ERROR_NO_DEVICE => Error::NoDevice,
+        LIBUSB_ERROR_NOT_FOUND => Error::NotFound,
+        LIBUSB_ERROR_BUSY => Error::Busy,
+        LIBUSB_ERROR_TIMEOUT => Error::Timeout,
+        LIBUSB_ERROR_OVERFLOW => Error::Overflow,
+        LIBUSB_ERROR_PIPE => Error::Pipe,
+        LIBUSB_ERROR_INTERRUPTED => Error::Interrupted,
+        LIBUSB_ERROR_NO_MEM => Error::NoMem,
+        LIBUSB_ERROR_NOT_SUPPORTED => Error::NotSupported,
+        LIBUSB_ERROR_OTHER | _ => Error::Other,
+    }
+}
+
+// TODO: Keep synchronized with `gateware/descriptors_vendor.py`.
+pub const INTERRUPT_BYTES_MAX: usize = 256;
+
 pub trait TransferHandler {
     fn callback(&self, transfer: *mut ffi::libusb_transfer);
 }
@@ -41,6 +66,47 @@ struct LibUsbTransferWrapper(*mut ffi::libusb_transfer);
 unsafe impl Send for LibUsbTransferWrapper {}
 
 impl Transfer {
+    pub fn new_interrupt_transfer<C: UsbContext>(
+        device_handle: Arc<DeviceHandle<C>>,
+        endpoint: u8,
+        packet_length: usize,
+        timeout: c_uint,
+        handler: Box<dyn TransferHandler>,
+    ) -> Self {
+        let buffer_length = packet_length;
+
+        let transfer = unsafe { ffi::libusb_alloc_transfer(0) };
+        let transfer = NonNull::new(transfer).expect("libusb_alloc_transfer was null");
+
+        let mut buffer = vec![0u8; buffer_length];
+
+        // TODO: There is certainly some leakage here. If I wasn't using these
+        // structures for the duration of the process, clean-up would become
+        // important. So... investigate (and fix?) at some point.
+
+        let user_data = Box::into_raw(
+            Box::new(handler)
+        ).cast::<libc::c_void>();
+
+        unsafe {
+            ffi::libusb_fill_interrupt_transfer(
+                transfer.as_ptr(),
+                device_handle.as_raw(),
+                endpoint,
+                buffer.as_mut_ptr(),
+                buffer.len().try_into().unwrap(),
+                Self::transfer_callback,
+                user_data,
+                timeout
+            );
+        }
+
+        Self {
+            buffer,
+            transfer,
+        }
+    }
+
     /// An isochronous endpoint is polled every `N` (micro)frames.
     /// Each microframe is 125 microseconds at high speed.
     /// During every polled (micro)frame, zero or more transactions may occur.
@@ -128,5 +194,67 @@ impl Transfer {
         };
 
         handler.callback(transfer);
+    }
+}
+
+pub struct CallbackWrapper<T> {
+    handler: Arc<Mutex<T>>,
+}
+
+impl<T> CallbackWrapper<T> {
+    pub fn new(handler: Arc<Mutex<T>>) -> Self {
+        Self {
+            handler,
+        }
+    }
+}
+
+impl<T: TransferHandler> TransferHandler for CallbackWrapper<T> {
+    fn callback(&self, transfer: *mut ffi::libusb_transfer) {
+        self.handler.lock().unwrap().callback(transfer);
+    }
+}
+
+pub trait CallbackIn {
+    fn callback_in(&mut self, transfer: *mut ffi::libusb_transfer);
+}
+
+pub struct CallbackInWrapper<T> {
+    handler: Arc<Mutex<T>>,
+}
+
+impl<T> CallbackInWrapper<T> {
+    pub fn new(handler: Arc<Mutex<T>>) -> Self {
+        Self {
+            handler,
+        }
+    }
+}
+
+impl<T: CallbackIn> TransferHandler for CallbackInWrapper<T> {
+    fn callback(&self, transfer: *mut ffi::libusb_transfer) {
+        self.handler.lock().unwrap().callback_in(transfer);
+    }
+}
+
+pub trait CallbackOut {
+    fn callback_out(&mut self, transfer: *mut ffi::libusb_transfer);
+}
+
+pub struct CallbackOutWrapper<T> {
+    handler: Arc<Mutex<T>>,
+}
+
+impl<T> CallbackOutWrapper<T> {
+    pub fn new(handler: Arc<Mutex<T>>) -> Self {
+        Self {
+            handler,
+        }
+    }
+}
+
+impl<T: CallbackOut> TransferHandler for CallbackOutWrapper<T> {
+    fn callback(&self, transfer: *mut ffi::libusb_transfer) {
+        self.handler.lock().unwrap().callback_out(transfer);
     }
 }

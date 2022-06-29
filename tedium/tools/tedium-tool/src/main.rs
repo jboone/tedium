@@ -3,8 +3,8 @@ use std::thread;
 use clap::{Parser, Subcommand, Args, ArgEnum};
 
 use console::{Color, style};
-use crossbeam::channel::unbounded;
-use framer::device::{Timeslot, Channel, AsyncThing};
+use crossbeam::channel::{unbounded, Receiver};
+use framer::device::{Timeslot, Channel, FramerInterruptThread, FramerInterruptMessage};
 use framer::test::{set_test_mode_liu, LIUTestMode, set_test_mode_framer, FramerTestMode};
 
 use crate::framer::device::{Device, Result};
@@ -116,11 +116,28 @@ fn main() -> Result<()> {
             }
         },
         Commands::Monitor(_) => {
-            // monitor(&context, &device)?;
+            let (framer_interrupt_sender, framer_interrupt_receiver) = unbounded();
 
-            if let Err(e) = framer::audio::pump_loopback() {
-                eprintln!("error: audio pump: {:?}", e);
-            }
+            thread::Builder::new()
+                .name("fr_int".to_string())
+                .spawn(move || {
+                    if let Err(e) = FramerInterruptThread::run(framer_interrupt_sender) {
+                        eprintln!("error: framer interrupt pump: {e:?}");
+                    }
+                    eprintln!("done: framer interrupt pump");
+                }).unwrap();
+
+            thread::Builder::new()
+                .name("fr_aud".to_string())
+                .spawn(move || {
+                    if let Err(e) = framer::audio::pump_loopback() {
+                        eprintln!("error: audio pump: {:?}", e);
+                    }
+                    eprintln!("done: audio pump");
+                }).unwrap();
+
+            monitor(framer_interrupt_receiver);
+            eprintln!("done: monitor");
         },
     }
 
@@ -332,6 +349,12 @@ fn monitor_channel_configure(channel: &Channel) -> Result<()> {
     Ok(())
 }
 
+fn monitor(receiver: Receiver<FramerInterruptMessage>) {
+    while let Ok(m) = receiver.recv() {
+        eprintln!("message: {m:?}");
+    }
+}
+/*
 #[derive(Copy, Clone, Debug, Default)]
 struct ChannelStatus {
     sending_yellow_alarm: bool,
@@ -742,7 +765,7 @@ fn monitor(context: &rusb::Context, device: &Device) -> Result<()> {
 
     Ok(())
 }
-
+*/
 ///////////////////////////////////////////////////////////////////////
 
 fn registers_dump_raw(device: &Device) -> Result<()> {
