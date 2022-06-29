@@ -351,7 +351,12 @@ fn monitor_channel_configure(channel: &Channel) -> Result<()> {
 
 fn monitor(receiver: Receiver<FramerInterruptMessage>) {
     while let Ok(m) = receiver.recv() {
-        eprintln!("message: {m:?}");
+        match m {
+            FramerInterruptMessage::Interrupt(b, n) => {
+                let b = &b[0..n];
+                eprintln!("message: {b:02x?}");
+            },
+        }
     }
 }
 /*

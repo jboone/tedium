@@ -1,9 +1,9 @@
 #![allow(non_snake_case)]
 
-use std::{time::Duration, marker::PhantomData, fmt, sync::{Mutex, Arc}};
+use std::{slice, time::Duration, marker::PhantomData, fmt, sync::{Mutex, Arc}};
 
-use crossbeam::channel::{Sender, unbounded};
-use rusb::{self, UsbContext, constants::{LIBUSB_ENDPOINT_IN, LIBUSB_TRANSFER_COMPLETED}, Error};
+use crossbeam::channel::Sender;
+use rusb::{self, UsbContext, constants::{LIBUSB_ENDPOINT_IN, LIBUSB_TRANSFER_COMPLETED}};
 use rusb::ffi;
 
 use crate::framer::usb::{EndpointNumber, InterfaceNumber, Transfer, INTERRUPT_BYTES_MAX, from_libusb, CallbackWrapper};
@@ -498,7 +498,19 @@ impl TransferHandler for FramerInterruptHandler {
         // doesn't trouble the host with 1,000 packets a second, the vast
         // majority of which require no work on the host's part?
         if status == LIBUSB_TRANSFER_COMPLETED && actual_length > 0 {
-            if let Err(e) = self.sender.send(FramerInterruptMessage::Interrupt) {
+            let actual_length = actual_length.try_into().unwrap();
+            let mut data = [0u8; INTERRUPT_BYTES_MAX];
+            
+            // TODO: Replace this and so much other transfer-related code
+            // with "safe" functions on the Transfer struct.
+            let buffer = unsafe {
+                let buffer = (*transfer).buffer;
+                slice::from_raw_parts_mut(buffer, actual_length)
+            };
+
+            data[0..actual_length].copy_from_slice(buffer);
+            let message = FramerInterruptMessage::Interrupt(data, actual_length);
+            if let Err(e) = self.sender.send(message) {
                 eprint!("error: data.sender.send: {:?}", e);
             }
         }
@@ -507,7 +519,7 @@ impl TransferHandler for FramerInterruptHandler {
 
 #[derive(Copy, Clone, Debug)]
 pub enum FramerInterruptMessage {
-    Interrupt,
+    Interrupt([u8; INTERRUPT_BYTES_MAX], usize),
 }
 
 pub struct FramerInterruptThread {
