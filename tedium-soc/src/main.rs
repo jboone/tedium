@@ -623,7 +623,12 @@ fn main() -> ! {
                 }
             }
 
-            usb_in_interrupt.transmit(2);
+            if !usb_in_interrupt.is_fifo_empty() {
+                // Avoid sending ZLPs that wake up the host's USB handling thread
+                // needlessly. The downside is a risk of a timeout if the USB stack
+                // decides the interrupt endpoint has died?
+                usb_in_interrupt.transmit(2);
+            }
 
             if channel_index == 7 {
                 resync = false;
