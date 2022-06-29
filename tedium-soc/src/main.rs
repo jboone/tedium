@@ -500,8 +500,8 @@ fn main() -> ! {
     // Set true to mimic all interrupt types being asserted,
     // thereby sending all the current interrupt state and clearing
     // all pending interrupts.
-    let mut resync = true;
-    let mut resync_count = 0;
+    let mut resync_start = false;
+    let mut resync = false;
 
     usb_out.set_ev_pending(usb_out.get_ev_pending());
     usb_out.set_ev_enable(1);
@@ -543,6 +543,11 @@ fn main() -> ! {
             test_points.toggle(0);
             if channel_index == 0 {
                 test_points.toggle(2);
+            }
+
+            if resync_start && channel_index == 0 {
+                resync_start = false;
+                resync = true;
             }
 
             let bisr = if resync {
@@ -621,13 +626,7 @@ fn main() -> ! {
             usb_in_interrupt.transmit(2);
 
             if channel_index == 7 {
-                resync_count += 1;
-                if resync_count == 10000 {
-                    resync_count = 0;
-                    resync = true;
-                } else {
-                    resync = false;
-                }
+                resync = false;
             }
         }
     }
