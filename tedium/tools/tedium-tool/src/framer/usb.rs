@@ -95,7 +95,7 @@ impl Transfer {
                 buffer.as_mut_ptr(),
                 buffer.len().try_into().unwrap(),
                 num_iso_packets,
-                Self::iso_transfer_callback,
+                Self::transfer_callback,
                 user_data,
                 timeout
             );
@@ -121,7 +121,7 @@ impl Transfer {
         }
     }
 
-    extern "system" fn iso_transfer_callback(transfer: *mut ffi::libusb_transfer) {
+    extern "system" fn transfer_callback(transfer: *mut ffi::libusb_transfer) {
         let handler = unsafe {
             let transfer = &mut *transfer;
             &mut *transfer.user_data.cast::<Box<dyn TransferHandler>>()
