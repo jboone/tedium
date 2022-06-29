@@ -70,7 +70,7 @@ class Descriptors:
             with c.InterfaceDescriptor() as i:
                 i.bInterfaceNumber = self.InterfaceNumber.Interrupt
 
-                # TODO: Interrupt endpoing should move to alternate setting 1?
+                # TODO: Interrupt endpoint should move to alternate setting 1?
 
                 with i.EndpointDescriptor() as e:
                     e.bEndpointAddress = USBDirection.IN.to_endpoint_address(self.EndpointNumber.Interrupt)

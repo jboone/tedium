@@ -170,7 +170,6 @@ class SoC(CPUSoC, Elaboratable):
             ('output_enable', [('o', 1)]),
         ])
 
-        # sync_clk_freq = 49.152e6
         sync_clk_freq = 60.0e6
         baudrate      = 115200
 
