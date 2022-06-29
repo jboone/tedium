@@ -719,9 +719,9 @@ fn main() -> ! {
                     usb_in_interrupt.write_fifo(fisr.into());
                     if fisr.SIG() != 0 {
                         for n in (0..24).step_by(2) {
-                            let h: u8 = channel.rsar(n+0).read().unwrap().into();
-                            let l: u8 = channel.rsar(n+1).read().unwrap().into();
-                            let v = (h << 4) | (l & 0xf);
+                            let even: u8 = channel.rsar(n+0).read().unwrap().into();
+                            let odd:  u8 = channel.rsar(n+1).read().unwrap().into();
+                            let v = (even << 4) | (odd & 0xf);
                             usb_in_interrupt.write_fifo(v);
                         }
                     }
