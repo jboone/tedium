@@ -418,6 +418,18 @@ where D: Xyz,
     pub fn bocuisr (&self) -> Access<D, BOCUISR>  { self.access_framer(0xb74) }
     pub fn bocuier (&self) -> Access<D, BOCUIER>  { self.access_framer(0xb75) }
 
+    pub fn rlcisr_x(&self, index: usize) -> Access<D, RLCISRx> {
+        const MAP: [usize; 8] = [0xb0a, 0xb14, 0xb1a, 0xb1c, 0xb1e, 0xb20, 0xb22, 0xb24];
+        assert!(index < MAP.len());
+        self.access_framer(MAP[index])
+    }
+
+    pub fn rlcier_x(&self, index: usize) -> Access<D, RLCIERx> {
+        const MAP: [usize; 8] = [0xb0b, 0xb15, 0xb1b, 0xb1d, 0xb1f, 0xb21, 0xb23, 0xb25];
+        assert!(index < MAP.len());
+        self.access_framer(MAP[index])
+    }
+
     pub fn dlsr(&self, index: usize) -> Access<D, DLSRx> {
         const MAP: [usize; 3] = [0xb06, 0xb16, 0xb26];
         assert!(index < MAP.len());

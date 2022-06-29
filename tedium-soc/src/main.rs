@@ -583,8 +583,12 @@ fn main() -> ! {
                     // NOTE This bit will be reset to 0 after the microprocessor has
                     // performed a read to the Loopback Code Interrupt Status Register.
 
-                    let rlcisr = channel.rlcisr().read().unwrap();
-                    usb_in_interrupt.write_fifo(rlcisr.into());
+                    // NOTE: There's a separate pair of RLCISR/RLCIER registers that are
+                    // *not* the receive loopback code <N> interrupt registers.
+                    for i in 0..8 {
+                        let rlcisr_x = channel.rlcisr_x(i).read().unwrap();
+                        usb_in_interrupt.write_fifo(rlcisr_x.into());
+                    }
                 }
 
                 if bisr.RxClkLOS() != 0 {

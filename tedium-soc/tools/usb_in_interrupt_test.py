@@ -44,8 +44,12 @@ while True:
             channel, bisr = r.read(2)
 
             if bisr & 0x40: # LBCODE
-                rlcisr = r.read(1)[0]
-                print(f"{channel} RLCISR={rlcisr}:02x")
+                rlcisrs = []
+                for i in range(8):
+                    rlcisr_x = r.read(1)[0]
+                    rlcisrs.append(rlcisr_x)
+                rlcisrs = ' '.join(f"{v:02x}" for v in rlcisrs)
+                print(f"{channel} RLCISRx=[{rlcisrs}]")
 
             if bisr & 0x08: # HDLC
                 for i in range(3):
