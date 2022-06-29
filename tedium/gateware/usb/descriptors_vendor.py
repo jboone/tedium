@@ -15,10 +15,12 @@ class Descriptors:
     class InterfaceNumber(IntEnum):
         FrameStream = 0
         Interrupt = 1
+        FramerControl = 2
 
     class EndpointNumber(IntEnum):
         FrameStream = 1
         Interrupt = 2
+        FramerControl = 3
 
     FRAME_BYTES_MAX = 512
 
@@ -27,6 +29,8 @@ class Descriptors:
 
     INTERRUPT_BYTES_MAX = 256
     INTERRUPT_INTERVAL = 4      # 2^(bInterval-1) microframes = every 8 microframes.
+
+    FRAMER_CONTROL_BYTES_MAX = 512
 
     def create_descriptors(self):
 
@@ -78,5 +82,18 @@ class Descriptors:
                     e.bmAttributes     = USBTransferType.INTERRUPT
 
                     e.bInterval        = self.INTERRUPT_INTERVAL
+
+            with c.InterfaceDescriptor() as i:
+                i.bInterfaceNumber = self.InterfaceNumber.FramerControl
+
+                with i.EndpointDescriptor() as e:
+                    e.bEndpointAddress = USBDirection.IN.to_endpoint_address(self.EndpointNumber.FramerControl)
+                    e.wMaxPacketSize   = self.FRAMER_CONTROL_BYTES_MAX
+                    e.bmAttributes     = USBTransferType.BULK
+
+                with i.EndpointDescriptor() as e:
+                    e.bEndpointAddress = USBDirection.OUT.to_endpoint_address(self.EndpointNumber.FramerControl)
+                    e.wMaxPacketSize   = self.FRAMER_CONTROL_BYTES_MAX
+                    e.bmAttributes     = USBTransferType.BULK
 
         return descriptors

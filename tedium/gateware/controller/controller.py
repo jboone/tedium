@@ -12,7 +12,7 @@ from lambdasoc.periph.sram import SRAMPeripheral
 from lambdasoc.periph.timer import TimerPeripheral
 from lambdasoc.soc.cpu import CPUSoC
 
-from luna.gateware.usb.usb2.interfaces.eptri import InFIFOInterface
+from luna.gateware.usb.usb2.interfaces.eptri import InFIFOInterface, OutFIFOInterface
 
 from tedium.gateware.framer.microprocessor import MicroprocessorInterface
 from tedium.gateware.usb.descriptors_vendor import Descriptors
@@ -149,7 +149,7 @@ class SoC(CPUSoC, Elaboratable):
     # USB_IN_EP0_ADDRESS  = 0x8007_0000
     # USB_OUT_EP0_ADDRESS = 0x8008_0000
     USB_IN_INT_ADDRESS  = 0x8009_0000
-    # USB_OUT_INT_ADDRESS = 0x800a_0000
+    USB_OUT_ADDRESS     = 0x800a_0000
 
     FRAMER_REG_ADDRESS  = 0x8010_0000
 
@@ -258,8 +258,8 @@ class SoC(CPUSoC, Elaboratable):
         self.usb_in_ep_interrupt = InFIFOInterface(endpoint_number=2, max_packet_size=Descriptors.INTERRUPT_BYTES_MAX)
         self.add_peripheral(self.usb_in_ep_interrupt, as_submodule=False, addr=self.USB_IN_INT_ADDRESS)
 
-        # self.usb_out_ep = OutFIFOInterface()
-        # self.add_peripheral(self.usb_out_ep, as_submodule=False, addr=self.USB_OUT_ADDRESS)
+        self.usb_out_ep = OutFIFOInterface(max_packet_size=Descriptors.FRAMER_CONTROL_BYTES_MAX)
+        self.add_peripheral(self.usb_out_ep, as_submodule=False, addr=self.USB_OUT_ADDRESS)
 
     @property
     def memory_map(self):

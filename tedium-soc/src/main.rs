@@ -539,6 +539,105 @@ impl USBEndpointIn {
     }
 }
 
+struct USBEndpointOut {
+    p: Peripheral,
+}
+
+impl USBEndpointOut {
+    fn new(p: u32) -> Self {
+        Self {
+            p: Peripheral::new(p),
+        }
+    }
+
+    fn get_data(&self) -> u8 {
+        self.p.register_read(0) as u8
+    }
+
+    fn get_data_ep(&self) -> u8 {
+        self.p.register_read(1) as u8
+    }
+
+    fn reset(&self) {
+        self.p.register_write(2, 1);
+    }
+
+    fn get_epno(&self) -> u8 {
+        self.p.register_read(3) as u8
+    }
+
+    fn set_epno(&self, v: u8) {
+        self.p.register_write(3, v as u32);
+    }
+
+    fn get_enable(&self) -> u8 {
+        self.p.register_read(4) as u8
+    }
+
+    fn set_enable(&self, v: u8) {
+        self.p.register_write(4, v as u32);
+    }
+
+    fn set_prime(&self, v: u8) {
+        self.p.register_write(5, v as u32);
+    }
+
+    fn get_stall(&self) -> u8 {
+        self.p.register_read(6) as u8
+    }
+
+    fn set_stall(&self, v: u8) {
+        self.p.register_write(6, v as u32);
+    }
+
+    fn get_have(&self) -> u8 {
+        self.p.register_read(7) as u8
+    }
+
+    fn set_have(&self, v: u8) {
+        self.p.register_write(7, v as u32);
+    }
+
+    fn get_pend(&self) -> u8 {
+        self.p.register_read(8) as u8
+    }
+
+    fn set_pend(&self, v: u8) {
+        self.p.register_write(8, v as u32);
+    }
+
+    fn get_pid(&self) -> u8 {
+        self.p.register_read(9) as u8
+    }
+
+    fn set_pid(&self, v: u8) {
+        self.p.register_write(9, v as u32);
+    }
+
+    fn set_owner(&self, v: u8) {
+        self.p.register_write(10, v as u32);
+    }
+
+    fn get_ev_status(&self) -> u32 {
+        self.p.register_read(11)
+    }
+
+    fn get_ev_pending(&self) -> u32 {
+        self.p.register_read(12)
+    }
+
+    fn set_ev_pending(&self, v: u32) {
+        self.p.register_write(12, v);
+    }
+
+    fn get_ev_enable(&self) -> u32 {
+        self.p.register_read(13)
+    }
+
+    fn set_ev_enable(&self, v: u32) {
+        self.p.register_write(13, v);
+    }
+}
 
 #[entry]
 fn main() -> ! {
@@ -548,6 +647,7 @@ fn main() -> ! {
     let mut delay = riscv::delay::McycleDelay::new(60000000);
     let uart = Uart::new(0x8000_0000);
     let usb_in_interrupt = USBEndpointIn::new(0x8009_0000);
+    let usb_out = USBEndpointOut::new(0x800a_0000);
 
     uart.write_str("reset\n");
 
@@ -582,6 +682,14 @@ fn main() -> ! {
     let mut resync = true;
     let mut resync_count = 0;
 
+    usb_out.set_ev_pending(usb_out.get_ev_pending());
+    usb_out.set_ev_enable(1);
+    usb_out.set_epno(3);
+    usb_out.set_owner(1);
+    usb_out.set_stall(0);
+    usb_out.set_prime(1);
+    usb_out.set_enable(1);
+
     loop {
         for (channel_index, channel) in device.channels().enumerate() {
             // Don't bother reading interrupt status until we can do something
@@ -591,6 +699,21 @@ fn main() -> ! {
             loop {
                 if usb_in_interrupt.is_idle() {
                     break;
+                }
+
+                if usb_out.get_have() != 0 {
+                    let ep = usb_out.get_data_ep();
+                    uart.write_hex_u8(ep);
+                    while usb_out.get_have() != 0 {
+                        let data = usb_out.get_data();
+                        uart.write_char(Uart::SPACE);
+                        uart.write_hex_u8(data);
+                    }
+                    uart.write_char(Uart::EOL);
+
+                    usb_out.set_stall(0);
+                    usb_out.set_prime(1);
+                    usb_out.set_enable(1);
                 }
             }
 
