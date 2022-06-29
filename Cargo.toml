@@ -2,10 +2,10 @@
 
 members = [
     "xrt86vx38-pac",
-    "tedium-soc",
     "tedium/tools/tedium-tool",
 ]
 
 exclude = [
     "modem",
+    "tedium-soc",
 ]
