@@ -408,13 +408,23 @@ fn enable_interrupts<D: Xyz>(channel: &Channel<D>) -> Result<()> {
     if clear_interrupts {
         // Clear any pending HDLC buffers.
         // NOTE: Didn't help unstick HDLC messages I was expecting to receive from myself via analog loopback.
+        channel.dlsr1().read()?;
+        channel.dlsr2().read()?;
+        channel.dlsr3().read()?;
+
         channel.rdlbcr1().read()?;
+        channel.rdlbcr2().read()?;
+        channel.rdlbcr3().read()?;
+
         for _ in 0..96 {
             channel.lapdbcr0(0).read()?;
             channel.lapdbcr1(0).read()?;
         }
 
-        channel.dlsr1().read()?;
+        channel.ss7sr1().read()?;
+        channel.ss7sr2().read()?;
+        channel.ss7sr3().read()?;
+
         channel.sbisr().read()?;
 
         channel.aeisr().read()?;
