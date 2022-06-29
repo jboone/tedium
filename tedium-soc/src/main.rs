@@ -568,11 +568,67 @@ fn main() -> ! {
                 usb_in_interrupt.write_fifo(bisr_u8);
 
                 if bisr.LBCODE() != 0 {
+                    // Loopback Code Block Interrupt Status
+                    // 
+                    // This bit indicates whether or not the Loopback Code block has an
+                    // interrupt request awaiting service.
+                    // 
+                    // 0 - Indicates no outstanding Loopback Code Block interrupt request
+                    // is awaiting service
+                    // 1 - Indicates the Loopback Code block has an interrupt request
+                    // awaiting service. Interrupt Service routine should branch to the inter-
+                    // rupt source and read the Loopback Code Interrupt Status register
+                    // (address 0xNB0A) to clear the interrupt
+                    // 
+                    // NOTE This bit will be reset to 0 after the microprocessor has
+                    // performed a read to the Loopback Code Interrupt Status Register.
+
                     let rlcisr = channel.rlcisr().read().unwrap();
                     usb_in_interrupt.write_fifo(rlcisr.into());
                 }
 
+                if bisr.RxClkLOS() != 0 {
+                    // Loss of Recovered Clock Interrupt Status
+                    // This bit indicates whether or not the T1 receive framer is currently
+                    // declaring the "Loss of Recovered Clock" interrupt.
+                    // 
+                    // 0 = Indicates that the T1 Receive Framer Block is NOT currently
+                    // declaring the "Loss of Recovered Clock" interrupt.
+                    // 1 = Indicates that the T1 Receive Framer Block is currently declar-
+                    // ing the "Loss of Recovered Clock" interrupt.
+                    // 
+                    // NOTE : This bit is only active if the clock loss detection feature is
+                    // enabled (Register - 0xN100)
+                }
+
+                if bisr.ONESEC() != 0 {
+                    // One Second Interrupt Status
+                    // This bit indicates whether or not the T1 receive framer block is cur-
+                    // rently declaring the "One Second" interrupt.
+                    // 
+                    // 0 = Indicates that the T1 Receive Framer Block is NOT currently
+                    // declaring the "One Second" interrupt.
+                    // 1 = Indicates that the T1 Receive Framer Block is currently declar-
+                    // ing the "One Second" interrupt.
+                }
+
                 if bisr.HDLC() != 0 {
+                    // HDLC Block Interrupt Status
+                    // This bit indicates whether or not the HDLC block has any interrupt
+                    // request awaiting service.
+                    // 
+                    // 0 = Indicates no outstanding HDLC block interrupt request is await-
+                    // ing service
+                    // 1 = Indicates HDLC Block has an interrupt request awaiting service.
+                    // Interrupt Service routine should branch to the interrupt source and
+                    // read the corresponding Data LInk Status Registers (address
+                    // 0xNB06, 0xNB16, 0xNB26, 0xNB10, 0xNB18, 0xNB28) to clear the
+                    // interrupt.
+                    //
+                    // NOTE: This bit will be reset to 0 after the microprocessor has
+                    // performed a read to the corresponding Data Link Status
+                    // Registers that generated the interrupt.
+
                     for hdlc_index in 0..3 {
                         let dlsr = channel.dlsr(hdlc_index).read().unwrap();
                         usb_in_interrupt.write_fifo(dlsr.into());
@@ -596,11 +652,40 @@ fn main() -> ! {
                 }
 
                 if bisr.SLIP() != 0 {
+                    // Slip Buffer Block Interrupt Status
+                    // This bit indicates whether or not the Slip Buffer block has any out-
+                    // standing interrupt request awaiting service.
+                    // 
+                    // 0 = Indicates no outstanding Slip Buffer Block interrupt request is
+                    // awaiting service
+                    // 1 = Indicates Slip Buffer block has an interrupt request awaiting ser-
+                    // vice. Interrupt Service routine should branch to the interrupt source
+                    // and read the Slip Buffer Interrupt Status register (address 0xNB08)
+                    // to clear the interrupt
+                    // 
+                    // NOTE: This bit will be reset to 0 after the microprocessor has
+                    // performed a read to the Slip Buffer Interrupt Status
+                    // Register.
+
                     let sbisr = channel.sbisr().read().unwrap();
                     usb_in_interrupt.write_fifo(sbisr.into());
                 }
 
                 if bisr.ALARM() != 0 {
+                    // Alarm & Error Block Interrupt Status
+                    // This bit indicates whether or not the Alarm & Error Block has any
+                    // outstanding interrupt request awaiting service.
+                    // 
+                    // 0 = Indicates no outstanding interrupt request is awaiting service
+                    // 1 = Indicates the Alarm & Error Block has an interrupt request await-
+                    // ing service. Interrupt service routine should branch to the interrupt
+                    // source and read the corresponding alarm and error status registers
+                    // (address 0xNB02, 0xNB0E, 0xNB40) to clear the interrupt.
+                    // 
+                    // NOTE: This bit will be reset to 0 after the microprocessor has
+                    // performed a read to the corresponding Alarm & Error
+                    // Interrupt Status register that generated the interrupt.
+
                     let aeisr = channel.aeisr().read().unwrap();
                     usb_in_interrupt.write_fifo(aeisr.into());
                     let exzsr = channel.exzsr().read().unwrap();
@@ -610,6 +695,19 @@ fn main() -> ! {
                 }
 
                 if bisr.T1FRAME() != 0 {
+                    // T1 Framer Block Interrupt Status
+                    // This bit indicates whether or not the T1 Framer block has any out-
+                    // standing interrupt request awaiting service.
+                    // 
+                    // 0 = Indicates no outstanding interrupt request is awaiting service.
+                    // 1 = Indicates the T1 Framer Block has an interrupt request awaiting
+                    // service. Interrupt service routine should branch to the interrupt
+                    // source and read the T1 Framer status register (address 0xNB04) to
+                    // clear the interrupt
+                    // 
+                    // NOTE: This bit will be reset to 0 after the microprocessor has
+                    // performed a read to the T1 Framer Interrupt Status register.
+
                     let fisr = channel.fisr().read().unwrap();
                     usb_in_interrupt.write_fifo(fisr.into());
                     if fisr.SIG() != 0 {
