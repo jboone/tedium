@@ -60,6 +60,7 @@ while True:
                         lapdbcr = r.read(rdlbc)
                         lapdbcr_s = format_bytes_hex(lapdbcr)
                         print(f"{channel} DLSR{i}={dlsr:02x} HDLC{i}=[{lapdbcr_s}]")
+                    ss7sr = r.read(1)[0]
             
             if bisr & 0x04: # SLIP
                 sbisr = r.read(1)[0]

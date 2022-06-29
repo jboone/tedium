@@ -652,7 +652,8 @@ fn main() -> ! {
                             usb_in_interrupt.write_fifo(v);
                         }
 
-                        let _ = channel.ss7sr(hdlc_index).read();
+                        let ss7sr = channel.ss7sr(hdlc_index).read().unwrap();
+                        usb_in_interrupt.write_fifo(ss7sr.into());
                     }
                 }
 
