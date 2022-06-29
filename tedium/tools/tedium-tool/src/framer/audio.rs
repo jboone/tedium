@@ -8,7 +8,7 @@ use std::thread;
 use crate::codec::ulaw;
 use crate::detector::{dtmf, Detector};
 use crate::framer::device::open_device;
-use crate::framer::usb::{InterfaceNumber, AlternateSetting, EndpointNumber, IsochronousTransfer, IsochronousTransferHandler};
+use crate::framer::usb::{InterfaceNumber, AlternateSetting, EndpointNumber, Transfer, TransferHandler};
 use crate::generator::ToneGenerator;
 use crate::generator::dual_tone::DualToneGenerator;
 
@@ -223,15 +223,15 @@ pub fn pump_loopback() -> Result<(), PumpError> {
     // Total number of transfers that can be in flight.
     const TRANSFERS_COUNT: usize = 8;
 
-    let mut transfers_in: Vec<IsochronousTransfer> = Vec::new();
-    let mut transfers_out: Vec<IsochronousTransfer> = Vec::new();
+    let mut transfers_in: Vec<Transfer> = Vec::new();
+    let mut transfers_out: Vec<Transfer> = Vec::new();
 
     let (patch_sender, patch_receiver) = unbounded();
     let (debug_sender, debug_receiver) = unbounded();
     let handler = Arc::new(Mutex::new(LoopbackFrameHandler::new(patch_receiver, debug_sender)));
 
     for _ in 0..TRANSFERS_COUNT {
-        let transfer_in = IsochronousTransfer::new(
+        let transfer_in = Transfer::new_iso_transfer(
             device_handle.clone(),
             LIBUSB_ENDPOINT_IN | EndpointNumber::FrameStream as u8,
             PACKETS_PER_TRANSFER,
@@ -243,7 +243,7 @@ pub fn pump_loopback() -> Result<(), PumpError> {
         transfer_in.submit();
         transfers_in.push(transfer_in);
 
-        let transfer_out = IsochronousTransfer::new(
+        let transfer_out = Transfer::new_iso_transfer(
             device_handle.clone(),
             LIBUSB_ENDPOINT_OUT | EndpointNumber::FrameStream as u8,
             PACKETS_PER_TRANSFER,
@@ -350,7 +350,7 @@ impl<T> CallbackInWrapper<T> {
     }
 }
 
-impl<T: CallbackIn> IsochronousTransferHandler for CallbackInWrapper<T> {
+impl<T: CallbackIn> TransferHandler for CallbackInWrapper<T> {
     fn callback(&self, transfer: *mut ffi::libusb_transfer) {
         self.handler.lock().unwrap().callback_in(transfer);
     }
@@ -372,7 +372,7 @@ impl<T> CallbackOutWrapper<T> {
     }
 }
 
-impl<T: CallbackOut> IsochronousTransferHandler for CallbackOutWrapper<T> {
+impl<T: CallbackOut> TransferHandler for CallbackOutWrapper<T> {
     fn callback(&self, transfer: *mut ffi::libusb_transfer) {
         self.handler.lock().unwrap().callback_out(transfer);
     }

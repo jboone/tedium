@@ -27,11 +27,11 @@ pub(crate) enum EndpointNumber {
     Interrupt = 2,
 }
 
-pub trait IsochronousTransferHandler {
+pub trait TransferHandler {
     fn callback(&self, transfer: *mut ffi::libusb_transfer);
 }
 
-pub struct IsochronousTransfer {
+pub struct Transfer {
     buffer: Vec<u8>,
     transfer: NonNull<ffi::libusb_transfer>,
 }
@@ -40,7 +40,7 @@ pub struct IsochronousTransfer {
 struct LibUsbTransferWrapper(*mut ffi::libusb_transfer);
 unsafe impl Send for LibUsbTransferWrapper {}
 
-impl IsochronousTransfer {
+impl Transfer {
     /// An isochronous endpoint is polled every `N` (micro)frames.
     /// Each microframe is 125 microseconds at high speed.
     /// During every polled (micro)frame, zero or more transactions may occur.
@@ -60,14 +60,14 @@ impl IsochronousTransfer {
     /// the packet size is large enough to contain all the data that can be transferred
     /// in a microframe.
     /// 
-    pub fn new<C: UsbContext>(
+    pub fn new_iso_transfer<C: UsbContext>(
         device_handle: Arc<DeviceHandle<C>>,
         endpoint: u8,
         num_iso_packets: usize,
         packet_length: usize,
         timeout: c_uint,
         // queue: FrameInQueue,
-        handler: Box<dyn IsochronousTransferHandler>,
+        handler: Box<dyn TransferHandler>,
     ) -> Self {
         let buffer_length = num_iso_packets * packet_length;
 
@@ -124,7 +124,7 @@ impl IsochronousTransfer {
     extern "system" fn iso_transfer_callback(transfer: *mut ffi::libusb_transfer) {
         let handler = unsafe {
             let transfer = &mut *transfer;
-            &mut *transfer.user_data.cast::<Box<dyn IsochronousTransferHandler>>()
+            &mut *transfer.user_data.cast::<Box<dyn TransferHandler>>()
         };
 
         handler.callback(transfer);
