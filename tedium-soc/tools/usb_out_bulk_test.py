@@ -32,7 +32,7 @@ ep = usb.util.find_descriptor(
 
 while True:
     try:
-        ep.write("bob")
+        ep.write(bytes([0x00, 0xfe, 0x01]))
         time.sleep(0.5)
     except usb.core.USBError as e:
         print(e)
