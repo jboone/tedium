@@ -1,11 +1,10 @@
-use std::io::{Read, Error, ErrorKind};
 use std::thread;
 
 use clap::{Parser, Subcommand, Args, ArgEnum};
 
-use console::{style, Color};
 use crossbeam::channel::{unbounded, Receiver};
 use framer::device::{Timeslot, Channel, FramerInterruptThread, FramerInterruptMessage};
+use framer::interrupt::{FramerInterruptStatus, print_framer_interrupt_status};
 use framer::test::{set_test_mode_liu, LIUTestMode, set_test_mode_framer, FramerTestMode};
 
 use crate::framer::device::{Device, Result};
@@ -146,157 +145,16 @@ fn main() -> Result<()> {
 
 ///////////////////////////////////////////////////////////////////////
 
-fn parse_framer_interrupt_message(b: &[u8]) -> std::io::Result<()> {
-    use framer::register::{AEISR, BISR, CIASR, DLSRx, EXZSR, FISR, RDLBCR, RLCISRx, RSAR, SBISR, SS7SRx};
-
-    let color = |v| if v != 0 { Color::Red } else { Color::Green };
-
-    let mut b = b.bytes();
-    let mut read = || { b.next().unwrap_or_else(|| Err(ErrorKind::UnexpectedEof.into())) };
-
-    let channel_index = read()?;
-    let bisr = BISR::from(read()?);
-    let bisr_u8: u8 = bisr.into();
-
-    eprint!("CH{} BISR:[{}][{}][{}][{}][{}][{}][{}]",
-        channel_index,
-        style("LBCODE").fg(color(bisr.LBCODE())),
-        style("RXCLOS").fg(color(bisr.RxClkLOS())),
-        style("ONESEC").fg(color(bisr.ONESEC())),
-        style("HDLC").fg(color(bisr.HDLC())),
-        style("SLIP").fg(color(bisr.SLIP())),
-        style("ALRM").fg(color(bisr.ALARM())),
-        style("T1FRM").fg(color(bisr.T1FRAME())),
-    );
-
-    if bisr.LBCODE() != 0 {
-        eprint!(" RLCISR=[");
-        for i in 0..8 {
-            let rlcisr_x = RLCISRx::from(read()?);
-            let rlcisr_x_u8: u8 = rlcisr_x.into();
-            eprint!(" {rlcisr_x_u8:02x}");
-        }
-        eprint!("]");
-    }
-
-    if bisr.RxClkLOS() != 0 {
-
-    }
-
-    if bisr.ONESEC() != 0 {
-
-    }
-
-    if bisr.HDLC() != 0 {
-        for hdlc_index in 0..3 {
-            let dlsr = DLSRx::from(read()?);
-            let dlsr_u8: u8 = dlsr.into();
-
-            if dlsr_u8 != 0 {
-                print!(" DLSR{}:[{}][{}][{}][{}][{}][{}][{}][{}]",
-                    hdlc_index,
-                    style("MOS").fg(color(dlsr.MSG_TYPE())),
-                    style("TxSOT").fg(color(dlsr.TxSOT())),
-                    style("RxSOT").fg(color(dlsr.RxSOT())),
-                    style("TxEOT").fg(color(dlsr.TxEOT())),
-                    style("RxEOT").fg(color(dlsr.RxEOT())),
-                    style("FCS").fg(color(dlsr.FCS_ERR())),
-                    style("RxABT").fg(color(dlsr.RxABORT())),
-                    style("RxIDL").fg(color(dlsr.RxIDLE())),
-                );
-
-                let rdlbcr = RDLBCR::from(read()?);
-                print!(" LAPDBCR{}:[", rdlbcr.RBUFPTR());
-
-                let rdlbc = rdlbcr.RDLBC();
-                for byte_index in 0..rdlbc {
-                    let hdlc_data = read()?;
-                    print!("{hdlc_data:02x}");
-                }
-                print!("]");
-
-                if dlsr.FCS_ERR() != 0 {
-                    print!(" FCS_ERR");
-                }
-            }
-
-            let ss7sr = SS7SRx::from(read()?);
-        }
-    }
-
-    if bisr.SLIP() != 0 {
-        let sbisr = SBISR::from(read()?);
-        print!(" SBISR:[{}][{}][{}][{}][{}][{}][{}][{}]",
-            style("TSBF").fg(color(sbisr.TxSB_FULL())),
-            style("TSBE").fg(color(sbisr.TxSB_EMPT())),
-            style("TSBS").fg(color(sbisr.TxSB_SLIP())),
-            style("RSBF").fg(color(sbisr.RxSB_FULL())),
-            style("RSBE").fg(color(sbisr.RxSB_EMPT())),
-            style("RSBS").fg(color(sbisr.RxSB_SLIP())),
-            style("SLC96LOCK").fg(color(sbisr.SLC96_LOCK())),
-            style("MFLOCK").fg(color(sbisr.Multiframe_LOCK())),
-        );
-    }
-
-    if bisr.ALARM() != 0 {
-        let aeisr = AEISR::from(read()?);
-        let exzsr = EXZSR::from(read()?);
-        let ciasr = CIASR::from(read()?);
-
-        print!(" AEISR:[{}][{}][{}][{}][{}][{}][{}][{}]",
-            style("RXOOF").fg(color(aeisr.RxOOF_State())),
-            style("RXAIS").fg(color(aeisr.RxAIS_State())),
-            style("RXYEL").fg(color(aeisr.RxYEL_State())),
-            style("LOS").fg(color(aeisr.LOS_State())),
-            style("LCV").fg(color(aeisr.LCVInt_Status())),
-            style("RXOOFX").fg(color(aeisr.RxOOF_State_Change())),
-            style("RXAISX").fg(color(aeisr.RxAIS_State_Change())),
-            style("RXYELX").fg(color(aeisr.RxYEL_State_Change())),
-        );
-
-        print!(" EXZSR:[{}]",
-            style("EXZ").fg(color(exzsr.EXZ_STATUS())),
-        );
-
-        print!(" CIASR:[{}][{}]",
-            style("RAISCI").fg(color(ciasr.RxAIS_CI_state())),
-            style("RRAICI").fg(color(ciasr.RxRAI_CI_state())),
-        );
-    }
-
-    if bisr.T1FRAME() != 0 {
-        let fisr = FISR::from(read()?);
-        print!(" FISR:[{}][{}][{}][{}][{}][{}][{}][{}]",
-            style("DS0X").fg(color(fisr.DS0_Change())),
-            style("DS0S").fg(color(fisr.DS0_Status())),
-            style("SIG").fg(color(fisr.SIG())),
-            style("COFA").fg(color(fisr.COFA())),
-            style("OOFX").fg(color(fisr.OOF_Status())),
-            style("FMD").fg(color(fisr.FMD())),
-            style("SE").fg(color(fisr.SE())),
-            style("FE").fg(color(fisr.FE())),
-        );
-
-        if fisr.SIG() != 0 {
-            for n in (0..24).step_by(2) {
-                let v = read()?;
-                let even = RSAR::from(v >> 4);
-                let odd = RSAR::from(v & 15);
-            }
-        }
-    }
-
-    println!();
-
-    Ok(())
-}
-
 fn monitor(receiver: Receiver<FramerInterruptMessage>) {
     while let Ok(m) = receiver.recv() {
         match m {
             FramerInterruptMessage::Interrupt(b, n) => {
-                let b = &b[0..n];
-                let _ = parse_framer_interrupt_message(b);
+                let truncated = &b[0..n];
+                if let Ok(status) = FramerInterruptStatus::from_slice(truncated) {
+                    print_framer_interrupt_status(&status);
+                } else {
+                    eprintln!("framer: interrupt: bad struct: {b:?}");
+                }
             },
         }
     }
