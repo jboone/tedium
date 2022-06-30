@@ -493,6 +493,55 @@ fn dump_registers<D: Xyz>(device: &D, uart: &Uart) {
     }
 }
 
+enum HostRequestError {
+    ShortPacket,
+    WrongEndpoint,
+}
+
+type HostRequestResult<T> = core::result::Result<T, HostRequestError>;
+
+struct USBOutReader<'a> {
+    ep: &'a USBEndpointOut,
+}
+
+impl<'a> USBOutReader<'a> {
+    fn from_endpoint(ep: &'a USBEndpointOut) -> Self {
+        Self {
+            ep
+        }
+    }
+
+    fn read(&self) -> HostRequestResult<u8> {
+        if self.ep.get_have() != 0 {
+            Ok(self.ep.get_data())
+        } else {
+            Err(HostRequestError::ShortPacket)
+        }
+    }
+}
+
+fn handle_host_request(usb_out: &USBEndpointOut, uart: &Uart) -> HostRequestResult<()> {
+    let data_ep = usb_out.get_data_ep();
+    if data_ep != EndpointNumber::FramerControl as u8 {
+        return Err(HostRequestError::WrongEndpoint);
+    }
+
+    uart.write_hex_u8(data_ep);
+    let reader = USBOutReader::from_endpoint(usb_out);
+
+    while let Ok(data) = reader.read() {
+        uart.write_char(Uart::SPACE);
+        uart.write_hex_u8(data);
+    }
+    uart.write_char(Uart::EOL);
+
+    usb_out.set_stall(0);
+    usb_out.set_prime(1);
+    usb_out.set_enable(1);
+
+    Ok(())
+}
+
 #[entry]
 fn main() -> ! {
     let mut test_points = TestPoints::new(0x8000_2000);
@@ -556,18 +605,7 @@ fn main() -> ! {
                 }
 
                 if usb_out.get_have() != 0 {
-                    let ep = usb_out.get_data_ep();
-                    uart.write_hex_u8(ep);
-                    while usb_out.get_have() != 0 {
-                        let data = usb_out.get_data();
-                        uart.write_char(Uart::SPACE);
-                        uart.write_hex_u8(data);
-                    }
-                    uart.write_char(Uart::EOL);
-
-                    usb_out.set_stall(0);
-                    usb_out.set_prime(1);
-                    usb_out.set_enable(1);
+                    let _ = handle_host_request(&usb_out, &uart);
                 }
             }
 
