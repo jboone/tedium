@@ -11,6 +11,7 @@ const HEXCHAR: [u8; 16] = [0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,
 impl Uart {
     pub const EOL: u8 = 0x0a;
     pub const SPACE: u8 = 0x20;
+    pub const EQUAL: u8 = 0x3d;
     
     pub fn new(p: u32) -> Self {
         Self {

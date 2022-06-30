@@ -1,6 +1,6 @@
 use xrt86vx38_pac::device::{DeviceAccess, RegisterAddress, RegisterValue, Result};
 
-
+#[derive(Copy, Clone)]
 pub struct Access {
     p: u32,
 }

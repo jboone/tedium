@@ -7,7 +7,7 @@ use embedded_hal::prelude::*;
 // use riscv::register;
 use riscv_rt::entry;
 
-use xrt86vx38_pac::{self, device::{Result, Xyz, Channel, Timeslot}};
+use xrt86vx38_pac::{self, device::{Result, Xyz, Channel, Timeslot, DeviceAccess}};
 use xrt86vx38_pac::register::*;
 
 mod framer;
@@ -494,11 +494,27 @@ fn dump_registers<D: Xyz>(device: &D, uart: &Uart) {
 }
 
 enum HostRequestError {
-    ShortPacket,
     WrongEndpoint,
+    ShortPacket,
+    LongPacket,
+    InvalidCommand,
+}
+
+fn error_str(e: HostRequestError) -> &'static str {
+    match e {
+        HostRequestError::InvalidCommand => "invalid",
+        HostRequestError::ShortPacket    => "short",
+        HostRequestError::LongPacket     => "long",
+        HostRequestError::WrongEndpoint  => "endpoint",
+    }
 }
 
 type HostRequestResult<T> = core::result::Result<T, HostRequestError>;
+
+#[derive(Copy, Clone, Debug)]
+enum HostRequestCommand {
+    RegisterRead(u16),
+}
 
 struct USBOutReader<'a> {
     ep: &'a USBEndpointOut,
@@ -520,33 +536,33 @@ impl<'a> USBOutReader<'a> {
     }
 }
 
-fn handle_host_request(usb_out: &USBEndpointOut, uart: &Uart) -> HostRequestResult<()> {
+fn handle_host_request(usb_out: &USBEndpointOut) -> HostRequestResult<HostRequestCommand> {
     let data_ep = usb_out.get_data_ep();
     if data_ep != EndpointNumber::FramerControl as u8 {
         return Err(HostRequestError::WrongEndpoint);
     }
 
-    uart.write_hex_u8(data_ep);
     let reader = USBOutReader::from_endpoint(usb_out);
 
-    while let Ok(data) = reader.read() {
-        uart.write_char(Uart::SPACE);
-        uart.write_hex_u8(data);
+    let command = reader.read()?;
+    match command {
+        0x00 => {
+            let l = reader.read()?;
+            let h = reader.read()?;
+            let address = ((h as u16) << 8) | (l as u16);
+            Ok(HostRequestCommand::RegisterRead(address))
+        },
+
+        _ => Err(HostRequestError::InvalidCommand),
     }
-    uart.write_char(Uart::EOL);
-
-    usb_out.set_stall(0);
-    usb_out.set_prime(1);
-    usb_out.set_enable(1);
-
-    Ok(())
 }
 
 #[entry]
 fn main() -> ! {
     let mut test_points = TestPoints::new(0x8000_2000);
     let framer_control = FramerControl::new(0x8000_3000);
-    let device = Device::new(Access::new(0x8010_0000));
+    let device_access = Access::new(0x8010_0000);
+    let device = Device::new(device_access);
     let mut delay = riscv::delay::McycleDelay::new(60000000);
     let uart = Uart::new(0x8000_0000);
     let usb_in_interrupt = USBEndpointIn::new(0x8009_0000);
@@ -605,7 +621,29 @@ fn main() -> ! {
                 }
 
                 if usb_out.get_have() != 0 {
-                    let _ = handle_host_request(&usb_out, &uart);
+                    match handle_host_request(&usb_out) {
+                        Ok(cmd) => {
+                            match cmd {
+                                HostRequestCommand::RegisterRead(address) => {
+                                    uart.write_hex_u16(address);
+                                    uart.write_char(Uart::EQUAL);
+                        
+                                    if let Ok(value) = device_access.read(address) {
+                                        uart.write_hex_u8(value);
+                                    } else {
+                                        uart.write_str("xx");
+                                    }
+
+                                    uart.write_char(Uart::EOL);
+                                },
+                            }
+                        },
+                        Err(e) => uart.write_str(error_str(e)),
+                    }
+
+                    usb_out.set_stall(0);
+                    usb_out.set_prime(1);
+                    usb_out.set_enable(1);
                 }
             }
 
