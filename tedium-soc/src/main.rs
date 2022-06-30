@@ -21,6 +21,39 @@ use test_points::TestPoints;
 use uart::Uart;
 use usb::{USBEndpointIn, USBEndpointOut};
 
+// TODO: Keep synchronized with `gateware/descriptors_vendor.py`.
+// TODO: This is a duplicate of the data in the `tedium-tool` project.
+#[derive(Copy, Clone, Debug)]
+#[repr(u8)]
+pub(crate) enum AlternateSetting {
+    Idle = 0,
+    Active = 1,
+}
+
+// TODO: Keep synchronized with `gateware/descriptors_vendor.py`.
+// TODO: This is a duplicate of the data in the `tedium-tool` project.
+#[derive(Copy, Clone, Debug)]
+#[repr(u8)]
+pub(crate) enum InterfaceNumber {
+    FrameStream = 0,
+    Interrupt = 1,
+    FramerControl = 2,
+}
+
+// TODO: Keep synchronized with `gateware/descriptors_vendor.py`.
+// TODO: This is a duplicate of the data in the `tedium-tool` project.
+#[derive(Copy, Clone, Debug)]
+#[repr(u8)]
+pub(crate) enum EndpointNumber {
+    FrameStream = 1,
+    Interrupt = 2,
+    FramerControl = 3,
+}
+
+// TODO: Keep synchronized with `gateware/descriptors_vendor.py`.
+// TODO: This is a duplicate of the data in the `tedium-tool` project.
+const FRAMER_CONTROL_BYTES_MAX: usize = 512;
+
 fn configure_channel<D: Xyz>(channel: &Channel<D>) -> Result<()> {
     // THEORY?
     // NOTE: I *think* the clock loss detection feature is not effective
@@ -505,7 +538,7 @@ fn main() -> ! {
 
     usb_out.set_ev_pending(usb_out.get_ev_pending());
     usb_out.set_ev_enable(1);
-    usb_out.set_epno(3);
+    usb_out.set_epno(EndpointNumber::FramerControl as u8);
     usb_out.set_owner(1);
     usb_out.set_stall(0);
     usb_out.set_prime(1);
