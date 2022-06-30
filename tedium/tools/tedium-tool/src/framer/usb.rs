@@ -17,6 +17,7 @@ pub(crate) enum AlternateSetting {
 pub(crate) enum InterfaceNumber {
     FrameStream = 0,
     Interrupt = 1,
+    FramerControl = 2,
 }
 
 // TODO: Keep synchronized with `gateware/descriptors_vendor.py`.
@@ -25,7 +26,12 @@ pub(crate) enum InterfaceNumber {
 pub(crate) enum EndpointNumber {
     FrameStream = 1,
     Interrupt = 2,
+    FramerControl = 3,
 }
+
+// TODO: Keep synchronized with `gateware/descriptors_vendor.py`.
+// TODO: This is a duplicate of the data in the `tedium-tool` project.
+const FRAMER_CONTROL_BYTES_MAX: usize = 512;
 
 // TODO: Borrowed from rusb::ffi, because it's pub(crate).
 #[doc(hidden)]
