@@ -536,12 +536,7 @@ impl<'a> USBOutReader<'a> {
     }
 }
 
-fn handle_host_request(usb_out: &USBEndpointOut) -> HostRequestResult<HostRequestCommand> {
-    let data_ep = usb_out.get_data_ep();
-    if data_ep != EndpointNumber::FramerControl as u8 {
-        return Err(HostRequestError::WrongEndpoint);
-    }
-
+fn parse_host_request(usb_out: &USBEndpointOut) -> HostRequestResult<HostRequestCommand> {
     let reader = USBOutReader::from_endpoint(usb_out);
 
     let command = reader.read()?;
@@ -621,26 +616,29 @@ fn main() -> ! {
                 }
 
                 if usb_out.get_have() != 0 {
-                    match handle_host_request(&usb_out) {
-                        Ok(cmd) => {
-                            match cmd {
-                                HostRequestCommand::RegisterRead(address) => {
-                                    uart.write_hex_u16(address);
-                                    uart.write_char(Uart::EQUAL);
-                        
-                                    if let Ok(value) = device_access.read(address) {
-                                        uart.write_hex_u8(value);
-                                    } else {
-                                        uart.write_str("xx");
-                                    }
+                    let data_ep = usb_out.get_data_ep();
+                    if data_ep == EndpointNumber::FramerControl as u8 {
+                        match parse_host_request(&usb_out) {
+                            Ok(cmd) => {
+                                match cmd {
+                                    HostRequestCommand::RegisterRead(address) => {
+                                        uart.write_hex_u16(address);
+                                        uart.write_char(Uart::EQUAL);
+                            
+                                        if let Ok(value) = device_access.read(address) {
+                                            uart.write_hex_u8(value);
+                                        } else {
+                                            uart.write_str("xx");
+                                        }
 
-                                    uart.write_char(Uart::EOL);
-                                },
-                            }
-                        },
-                        Err(e) => uart.write_str(error_str(e)),
+                                        uart.write_char(Uart::EOL);
+                                    },
+                                }
+                            },
+                            Err(e) => uart.write_str(error_str(e)),
+                        }
                     }
-
+                    
                     usb_out.set_stall(0);
                     usb_out.set_prime(1);
                     usb_out.set_enable(1);
