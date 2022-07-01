@@ -1,4 +1,5 @@
 use std::thread;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand, Args, ArgEnum};
 
@@ -8,6 +9,7 @@ use framer::dump::{registers_dump_raw, registers_dump_global, registers_dump_cha
 use framer::interrupt::{FramerInterruptStatus, print_framer_interrupt_status};
 use framer::test::{set_test_mode_liu, LIUTestMode, set_test_mode_framer, FramerTestMode};
 
+use crate::framer::audio::{TimeslotAddress, ProcessorMessage, Patch, ToneSource};
 use crate::framer::device::{Device, Result};
 
 mod codec;
@@ -118,6 +120,8 @@ fn main() -> Result<()> {
         Commands::Monitor(_) => {
             let (framer_interrupt_sender, framer_interrupt_receiver) = unbounded();
 
+            let (patch_sender, patch_receiver) = unbounded();
+
             thread::Builder::new()
                 .name("fr_int".to_string())
                 .spawn(move || {
@@ -130,10 +134,39 @@ fn main() -> Result<()> {
             thread::Builder::new()
                 .name("fr_aud".to_string())
                 .spawn(move || {
-                    if let Err(e) = framer::audio::pump_loopback() {
+                    if let Err(e) = framer::audio::pump_loopback(patch_receiver) {
                         eprintln!("error: audio pump: {:?}", e);
                     }
                     eprintln!("done: audio pump");
+                }).unwrap();
+
+            thread::Builder::new()
+                .name("repatch".into())
+                .spawn(move || {
+                    // Quick demo of sending changes to audio processor patching.
+                    let address = TimeslotAddress::new(0, 0);
+
+                    loop {
+                        // Idle / on-hook.
+                        patch_sender.send(ProcessorMessage::Patch(address, Patch::Idle)).unwrap();
+                        thread::sleep(Duration::from_millis(1000));
+
+                        // Dial tone
+                        patch_sender.send(ProcessorMessage::Patch(address, Patch::Tone(ToneSource::DialTonePrecise))).unwrap();
+                        thread::sleep(Duration::from_millis(1000));
+
+                        // Ring / silence cadence.
+                        for _ in 0..3 {
+                            patch_sender.send(ProcessorMessage::Patch(address, Patch::Idle)).unwrap();
+                            thread::sleep(Duration::from_millis(4000));
+                            patch_sender.send(ProcessorMessage::Patch(address, Patch::Tone(ToneSource::Ringback))).unwrap();
+                            thread::sleep(Duration::from_millis(2000));
+                        }
+
+                        // Connect to ourselves.
+                        patch_sender.send(ProcessorMessage::Patch(address, Patch::Input(address))).unwrap();
+                        thread::sleep(Duration::from_millis(5000));
+                    }
                 }).unwrap();
 
             monitor(framer_interrupt_receiver);

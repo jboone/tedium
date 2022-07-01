@@ -200,7 +200,7 @@ impl AudioProcessor {
 
 ///////////////////////////////////////////////////////////////////////
 
-pub fn pump_loopback() -> Result<(), PumpError> {
+pub fn pump_loopback(patch_receiver: Receiver<ProcessorMessage>) -> Result<(), PumpError> {
     let mut context = rusb::Context::new()?;
 
     let mut device = open_device(&mut context)?;
@@ -226,7 +226,6 @@ pub fn pump_loopback() -> Result<(), PumpError> {
     let mut transfers_in: Vec<Transfer> = Vec::new();
     let mut transfers_out: Vec<Transfer> = Vec::new();
 
-    let (patch_sender, patch_receiver) = unbounded();
     let (debug_sender, debug_receiver) = unbounded();
     let handler = Arc::new(Mutex::new(LoopbackFrameHandler::new(patch_receiver, debug_sender)));
 
@@ -284,35 +283,6 @@ pub fn pump_loopback() -> Result<(), PumpError> {
                         eprint!("\n{p:?} {c:?}");
                     },
                 }
-            }
-        }).unwrap();
-
-    thread::Builder::new()
-        .name("repatch".into())
-        .spawn(move || {
-            // Quick demo of sending changes to audio processor patching.
-            let address = TimeslotAddress::new(0, 0);
-
-            loop {
-                // Idle / on-hook.
-                patch_sender.send(ProcessorMessage::Patch(address, Patch::Idle)).unwrap();
-                thread::sleep(Duration::from_millis(1000));
-
-                // Dial tone
-                patch_sender.send(ProcessorMessage::Patch(address, Patch::Tone(ToneSource::DialTonePrecise))).unwrap();
-                thread::sleep(Duration::from_millis(1000));
-
-                // Ring / silence cadence.
-                for _ in 0..3 {
-                    patch_sender.send(ProcessorMessage::Patch(address, Patch::Idle)).unwrap();
-                    thread::sleep(Duration::from_millis(4000));
-                    patch_sender.send(ProcessorMessage::Patch(address, Patch::Tone(ToneSource::Ringback))).unwrap();
-                    thread::sleep(Duration::from_millis(2000));
-                }
-
-                // Connect to ourselves.
-                patch_sender.send(ProcessorMessage::Patch(address, Patch::Input(address))).unwrap();
-                thread::sleep(Duration::from_millis(5000));
             }
         }).unwrap();
 
