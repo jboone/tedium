@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import time
+import sys
 
 import usb.core
 
@@ -43,7 +43,10 @@ while True:
     try:
         ep_out.write(bytes([0x00, 0xfe, 0x01]))
     except usb.core.USBError as e:
-        print(f"OUT: {e}")
+        if e.errno == 19:
+            print("Disconnected")
+            sys.exit(-1)
+        print(f"{command_count} OUT: {e}")
 
     try:
         result = ep_in.read(Descriptors.SOC_OUT_BYTES_MAX)
@@ -54,5 +57,7 @@ while True:
             if command_count % 10000 == 0:
                 print(f"{command_count}")
     except usb.core.USBError as e:
-        print(f"IN: {e}")
-
+        if e.errno == 19:
+            print("Disconnected")
+            sys.exit(-1)
+        print(f"{command_count} IN: {e}")
