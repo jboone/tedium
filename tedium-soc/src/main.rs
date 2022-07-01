@@ -599,7 +599,6 @@ fn main() -> ! {
     usb_out.set_ev_pending(usb_out.get_ev_pending());
     usb_out.set_ev_enable(1);
     usb_out.set_epno(EndpointNumber::FramerControl as u8);
-    usb_out.set_owner(1);
     usb_out.set_stall(0);
     usb_out.set_prime(1);
     usb_out.set_enable(1);

@@ -127,10 +127,6 @@ impl USBEndpointOut {
         self.p.register_write(9, v as u32);
     }
 
-    pub fn set_owner(&self, v: u8) {
-        self.p.register_write(10, v as u32);
-    }
-
     pub fn get_ev_status(&self) -> u32 {
         self.p.register_read(11)
     }
