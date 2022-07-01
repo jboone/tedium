@@ -37,6 +37,8 @@ ep_in = usb.util.find_descriptor(
         and usb.util.endpoint_address(e.bEndpointAddress) == ENDPOINT
 )
 
+command_count = 0
+
 while True:
     try:
         ep_out.write(bytes([0x00, 0xfe, 0x01]))
@@ -45,7 +47,12 @@ while True:
 
     try:
         result = ep_in.read(Descriptors.SOC_OUT_BYTES_MAX)
-        print(result)
+        if len(result) != 1:
+            print(result)
+        else:
+            command_count += 1
+            if command_count % 10000 == 0:
+                print(f"{command_count}")
     except usb.core.USBError as e:
         print(f"IN: {e}")
 
