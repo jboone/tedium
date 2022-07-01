@@ -560,7 +560,7 @@ fn main() -> ! {
     let device = Device::new(device_access);
     let mut delay = riscv::delay::McycleDelay::new(60000000);
     let uart = Uart::new(0x8000_0000);
-    let usb_in_interrupt = USBEndpointIn::new(0x8009_0000);
+    let usb_in_int = USBEndpointIn::new(0x8009_0000);
     let usb_out = USBEndpointOut::new(0x800a_0000);
 
     uart.write_str("reset\n");
@@ -610,7 +610,7 @@ fn main() -> ! {
             // data to the host.
 
             loop {
-                if usb_in_interrupt.is_idle() {
+                if usb_in_int.is_idle() {
                     break;
                 }
 
@@ -644,7 +644,7 @@ fn main() -> ! {
                 }
             }
 
-            usb_in_interrupt.clear_stall();
+            usb_in_int.clear_stall();
 
             test_points.toggle(0);
             if channel_index == 0 {
@@ -670,8 +670,8 @@ fn main() -> ! {
 
             // Ignore the ONESEC interrupt, which apparently we can't shut off.
             if bisr_u8 & 0b01101111u8 != 0 {
-                usb_in_interrupt.write_fifo(channel_index as u8);
-                usb_in_interrupt.write_fifo(bisr_u8);
+                usb_in_int.write_fifo(channel_index as u8);
+                usb_in_int.write_fifo(bisr_u8);
 
                 if bisr.LBCODE() != 0 {
                     // Loopback Code Block Interrupt Status
@@ -693,7 +693,7 @@ fn main() -> ! {
                     // *not* the receive loopback code <N> interrupt registers.
                     for i in 0..8 {
                         let rlcisr_x = channel.rlcisr_x(i).read().unwrap();
-                        usb_in_interrupt.write_fifo(rlcisr_x.into());
+                        usb_in_int.write_fifo(rlcisr_x.into());
                     }
                 }
 
@@ -741,10 +741,10 @@ fn main() -> ! {
 
                     for hdlc_index in 0..3 {
                         let dlsr = channel.dlsr(hdlc_index).read().unwrap();
-                        usb_in_interrupt.write_fifo(dlsr.into());
+                        usb_in_int.write_fifo(dlsr.into());
 
                         let rdlbcr = channel.rdlbcr(hdlc_index).read().unwrap();
-                        usb_in_interrupt.write_fifo(rdlbcr.into());
+                        usb_in_int.write_fifo(rdlbcr.into());
 
                         let lapdbcr = match rdlbcr.RBUFPTR() {
                             0 => channel.lapdbcr0(0),
@@ -755,11 +755,11 @@ fn main() -> ! {
                         let rdlbc = rdlbcr.RDLBC();
                         for _ in 0..rdlbc {
                             let v = lapdbcr.read().unwrap();
-                            usb_in_interrupt.write_fifo(v);
+                            usb_in_int.write_fifo(v);
                         }
 
                         let ss7sr = channel.ss7sr(hdlc_index).read().unwrap();
-                        usb_in_interrupt.write_fifo(ss7sr.into());
+                        usb_in_int.write_fifo(ss7sr.into());
                     }
                 }
 
@@ -780,7 +780,7 @@ fn main() -> ! {
                     // Register.
 
                     let sbisr = channel.sbisr().read().unwrap();
-                    usb_in_interrupt.write_fifo(sbisr.into());
+                    usb_in_int.write_fifo(sbisr.into());
                 }
 
                 if bisr.ALARM() != 0 {
@@ -799,11 +799,11 @@ fn main() -> ! {
                     // Interrupt Status register that generated the interrupt.
 
                     let aeisr = channel.aeisr().read().unwrap();
-                    usb_in_interrupt.write_fifo(aeisr.into());
+                    usb_in_int.write_fifo(aeisr.into());
                     let exzsr = channel.exzsr().read().unwrap();
-                    usb_in_interrupt.write_fifo(exzsr.into());
+                    usb_in_int.write_fifo(exzsr.into());
                     let ciasr = channel.ciasr().read().unwrap();
-                    usb_in_interrupt.write_fifo(ciasr.into());
+                    usb_in_int.write_fifo(ciasr.into());
                 }
 
                 if bisr.T1FRAME() != 0 {
@@ -821,23 +821,23 @@ fn main() -> ! {
                     // performed a read to the T1 Framer Interrupt Status register.
 
                     let fisr = channel.fisr().read().unwrap();
-                    usb_in_interrupt.write_fifo(fisr.into());
+                    usb_in_int.write_fifo(fisr.into());
                     if fisr.SIG() != 0 {
                         for n in (0..24).step_by(2) {
                             let even: u8 = channel.rsar(n+0).read().unwrap().into();
                             let odd:  u8 = channel.rsar(n+1).read().unwrap().into();
                             let v = (even << 4) | (odd & 0xf);
-                            usb_in_interrupt.write_fifo(v);
+                            usb_in_int.write_fifo(v);
                         }
                     }
                 }
             }
 
-            if !usb_in_interrupt.is_fifo_empty() {
+            if !usb_in_int.is_fifo_empty() {
                 // Avoid sending ZLPs that wake up the host's USB handling thread
                 // needlessly. The downside is a risk of a timeout if the USB stack
                 // decides the interrupt endpoint has died?
-                usb_in_interrupt.transmit(2);
+                usb_in_int.transmit(EndpointNumber::Interrupt as u8);
             }
 
             if channel_index == 7 {

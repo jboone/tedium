@@ -37,7 +37,7 @@ def format_bytes_hex(d):
 
 while True:
     try:
-        report = ep_report_in.read(Descriptors.INTERRUPT_BYTES_MAX)
+        report = ep_report_in.read(Descriptors.SOC_OUT_BYTES_MAX)
         # report = bytes(report)
         if len(report) > 0:
             r = BytesIO(report)
