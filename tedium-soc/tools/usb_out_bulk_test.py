@@ -23,41 +23,77 @@ dev.set_interface_altsetting(
     alternate_setting=ALTERNATE_SETTING
 )
 
-ep_out = usb.util.find_descriptor(
-    intf,
-    custom_match=lambda e:
-        usb.util.endpoint_direction(e.bEndpointAddress) == usb.util.ENDPOINT_OUT \
-        and usb.util.endpoint_address(e.bEndpointAddress) == ENDPOINT
-)
+class HostCommand:
+    def __init__(self, intf):
+        self._ep_out = usb.util.find_descriptor(
+            intf,
+            custom_match=lambda e:
+                usb.util.endpoint_direction(e.bEndpointAddress) == usb.util.ENDPOINT_OUT \
+                and usb.util.endpoint_address(e.bEndpointAddress) == ENDPOINT
+        )
+        self._ep_in = usb.util.find_descriptor(
+            intf,
+            custom_match=lambda e:
+                usb.util.endpoint_direction(e.bEndpointAddress) == usb.util.ENDPOINT_IN \
+                and usb.util.endpoint_address(e.bEndpointAddress) == ENDPOINT
+        )
+        self._command_count = 0
 
-ep_in = usb.util.find_descriptor(
-    intf,
-    custom_match=lambda e:
-        usb.util.endpoint_direction(e.bEndpointAddress) == usb.util.ENDPOINT_IN \
-        and usb.util.endpoint_address(e.bEndpointAddress) == ENDPOINT
-)
+    def _send_command(self, b: bytes):
+        try:
+            self._command_count += 1
+            self._ep_out.write(b)
+        except usb.core.USBError as e:
+            if e.errno == 19:
+                print("OUT: disconnected")
+                sys.exit(-1)
+            elif e.errno == 110:
+                print(f"OUT: {e}")
+            else:
+                raise e
 
-command_count = 0
+    def _await_response(self) -> bytes:
+        try:
+            return self._ep_in.read(Descriptors.SOC_OUT_BYTES_MAX)
+        except usb.core.USBError as e:
+            if e.errno == 19:
+                print("IN: disconnected")
+                sys.exit(-1)
+            elif e.errno == 110:
+                print(f"IN: {e}")
+            else:
+                raise e
 
-while True:
-    try:
-        ep_out.write(bytes([0x00, 0xfe, 0x01]))
-    except usb.core.USBError as e:
-        if e.errno == 19:
-            print("Disconnected")
-            sys.exit(-1)
-        print(f"{command_count} OUT: {e}")
+    def _execute(self, b: bytes) -> bytes:
+        self._send_command(b)
+        return self._await_response()
 
-    try:
-        result = ep_in.read(Descriptors.SOC_OUT_BYTES_MAX)
-        if len(result) != 1:
-            print(result)
-        else:
-            command_count += 1
-            if command_count % 10000 == 0:
-                print(f"{command_count}")
-    except usb.core.USBError as e:
-        if e.errno == 19:
-            print("Disconnected")
-            sys.exit(-1)
-        print(f"{command_count} IN: {e}")
+    def register_read(self, address: int) -> int:
+        r = self._execute([0x00, address & 0xff, address >> 8])
+        return r[0]
+
+    def register_write(self, address: int, value: int):
+        self._execute([0x01, address & 0xff, address >> 8, value])
+
+def test_fast_writes(command: HostCommand):
+    while True:
+        command.register_read(0x01fe)
+
+        if command._command_count % 10000 == 0:
+            print(f"{command._command_count}")
+
+def test_ring_first_channel(command: HostCommand):
+    import time
+    while True:
+        command.register_write(0x0340, 0x05)
+        time.sleep(2.0)
+        command.register_write(0x0340, 0x0f)
+        command.register_write(0x0341, 0x05)
+        time.sleep(2.0)
+        command.register_write(0x0341, 0x0f)
+        time.sleep(2.0)
+
+command = HostCommand(intf)
+
+# test_fast_writes(command)
+test_ring_first_channel(command)
