@@ -610,10 +610,8 @@ fn main() -> ! {
             // data to the host.
 
             loop {
-                if usb_in_int.is_idle() {
-                    break;
-                }
-
+                // Checking USB OUT needs to come first in this loop, otherwise
+                // it gets starved by the very frequent USB INs.
                 if usb_out.get_have() != 0 {
                     let data_ep = usb_out.get_data_ep();
                     if data_ep == EndpointNumber::FramerControl as u8 {
@@ -641,6 +639,10 @@ fn main() -> ! {
                     usb_out.set_stall(0);
                     usb_out.set_prime(1);
                     usb_out.set_enable(1);
+                }
+
+                if usb_in_int.is_idle() {
+                    break;
                 }
             }
 
