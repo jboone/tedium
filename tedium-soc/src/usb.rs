@@ -1,4 +1,4 @@
-use crate::peripheral::Peripheral;
+use crate::{peripheral::Peripheral, uart::Uart};
 
 pub struct USBEndpointIn {
     p: Peripheral,
@@ -149,5 +149,40 @@ impl USBEndpointOut {
 
     pub fn set_ev_enable(&self, v: u32) {
         self.p.register_write(13, v);
+    }
+}
+
+///////////////////////////////////////////////////////////////////////
+// Debugging stuff
+// 
+
+#[derive(Copy, Clone, Default, PartialEq)]
+struct USBOutState {
+    data_ep: u8,
+    enable: u8,
+    stall: u8,
+    have: u8,
+    pend: u8,
+}
+
+impl USBOutState {
+    fn from_endpoint(ep: &USBEndpointOut) -> Self {
+        USBOutState {
+            data_ep: ep.get_data_ep(),
+            enable: ep.get_enable(),
+            stall: ep.get_stall(),
+            have: ep.get_have(),
+            pend: ep.get_pend(),
+        }
+    }
+
+    fn print(&self, uart: &Uart) {
+        uart.write_str("O[");
+        uart.write_hex_u8(self.data_ep);
+        uart.write_char(0x30 + self.enable);
+        uart.write_char(0x30 + self.stall);
+        uart.write_char(0x30 + self.have);
+        uart.write_char(0x30 + self.pend);
+        uart.write_str("]\n");
     }
 }
