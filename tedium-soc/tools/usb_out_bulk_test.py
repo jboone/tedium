@@ -40,9 +40,12 @@ ep_in = usb.util.find_descriptor(
 while True:
     try:
         ep_out.write(bytes([0x00, 0xfe, 0x01]))
+    except usb.core.USBError as e:
+        print(f"OUT: {e}")
+
+    try:
         result = ep_in.read(Descriptors.SOC_OUT_BYTES_MAX)
         print(result)
-        time.sleep(0.5)
     except usb.core.USBError as e:
-        print(e)
+        print(f"IN: {e}")
 
