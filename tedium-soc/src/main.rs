@@ -514,6 +514,7 @@ type HostRequestResult<T> = core::result::Result<T, HostRequestError>;
 #[derive(Copy, Clone, Debug)]
 enum HostRequestCommand {
     RegisterRead(u16),
+    RegisterWrite(u16, u8),
 }
 
 struct USBOutReader<'a> {
@@ -546,6 +547,13 @@ fn parse_host_request(usb_out: &USBEndpointOut) -> HostRequestResult<HostRequest
             let h = reader.read()?;
             let address = ((h as u16) << 8) | (l as u16);
             Ok(HostRequestCommand::RegisterRead(address))
+        },
+        0x01 => {
+            let l = reader.read()?;
+            let h = reader.read()?;
+            let address = ((h as u16) << 8) | (l as u16);
+            let value = reader.read()?;
+            Ok(HostRequestCommand::RegisterWrite(address, value))
         },
 
         _ => Err(HostRequestError::InvalidCommand),
@@ -639,6 +647,15 @@ fn main() -> ! {
                                             uart.write_str("rr ");
                                             uart.write_hex_u16(address);
                                             uart.write_str(" failed\n");
+                                        }
+                                    },
+                                    HostRequestCommand::RegisterWrite(address, value) => {
+                                        if let Ok(()) = device_access.write(address, value) {
+                                            usb_in.transmit(EndpointNumber::FramerControl as u8);
+                                        } else {
+                                            uart.write_str("wr ");
+                                            uart.write_hex_u16(address);
+                                            uart.write_str(" write failed\n");
                                         }
                                     },
                                 }
