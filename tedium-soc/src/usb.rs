@@ -31,6 +31,10 @@ impl USBEndpointIn {
         self.p.register_write(3, 0);
     }
 
+    pub fn is_stalled(&self) -> bool {
+        self.p.register_read(3) != 0
+    }
+
     pub fn is_idle(&self) -> bool {
         self.p.register_read(4) != 0
     }
