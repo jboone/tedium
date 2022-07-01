@@ -615,27 +615,31 @@ fn main() -> ! {
                 // it gets starved by the very frequent USB INs.
                 if usb_out.get_enable() == 0 {
                     if usb_out.get_have() != 0 && usb_out.get_data_ep() == EndpointNumber::FramerControl as u8 {
+
+                        // Assert that USB IN endpoint is ready for our response.
+                        if usb_in.is_stalled() {
+                            usb_in.clear_stall();
+                            uart.write_str("IN: stall\n");
+                        }
+                        if !usb_in.is_idle() {
+                            uart.write_str("IN: !idle\n");
+                        }
+                        if !usb_in.is_fifo_empty() {
+                            uart.write_str("IN: !empty\n");
+                        }
+
                         match parse_host_request(&usb_out) {
                             Ok(cmd) => {
                                 match cmd {
                                     HostRequestCommand::RegisterRead(address) => {
-                                        uart.write_hex_u16(address);
-                                        uart.write_char(Uart::EQUAL);
-                            
                                         if let Ok(value) = device_access.read(address) {
-                                            while !usb_in.is_idle() {
-
-                                            }
-                                            usb_in.clear_stall();
                                             usb_in.write_fifo(value);
                                             usb_in.transmit(EndpointNumber::FramerControl as u8);
-
-                                            uart.write_hex_u8(value);
                                         } else {
-                                            uart.write_str("xx");
+                                            uart.write_str("rr ");
+                                            uart.write_hex_u16(address);
+                                            uart.write_str(" failed\n");
                                         }
-
-                                        uart.write_char(Uart::EOL);
                                     },
                                 }
                             },
