@@ -144,10 +144,6 @@ class SoC(CPUSoC, Elaboratable):
     TP_ADDRESS          = 0x8000_2000
     FRAMER_CTRL_ADDRESS = 0x8000_3000
 
-    # USB_CORE_ADDRESS    = 0x8005_0000
-    # USB_SETUP_ADDRESS   = 0x8006_0000
-    # USB_IN_EP0_ADDRESS  = 0x8007_0000
-    # USB_OUT_EP0_ADDRESS = 0x8008_0000
     USB_IN_INT_ADDRESS  = 0x8009_0000
     USB_OUT_ADDRESS     = 0x800a_0000
 
@@ -245,15 +241,6 @@ class SoC(CPUSoC, Elaboratable):
 
         self.framer = FramerRegistersPeripheral()
         self.add_peripheral(self.framer, addr=self.FRAMER_REG_ADDRESS, sparse=True)
-
-        # self.usb_device_controller = USBDeviceController()
-        # self.add_peripheral(self.usb_device_controller, addr=self.USB_CORE_ADDRESS)
-
-        # self.usb_setup = SetupFIFOInterface()
-        # self.add_peripheral(self.usb_setup, as_submodule=False, addr=self.USB_SETUP_ADDRESS)
-
-        # self.usb_in_ep_0 = InFIFOInterface(endpoint_number=0, max_packet_size=64)
-        # self.add_peripheral(self.usb_in_ep_0, as_submodule=False, addr=self.USB_IN_EP0_ADDRESS)
 
         self.usb_in_int_ep = InFIFOInterface(max_packet_size=Descriptors.SOC_IN_BYTES_MAX)
         self.add_peripheral(self.usb_in_int_ep, as_submodule=False, addr=self.USB_IN_INT_ADDRESS)
