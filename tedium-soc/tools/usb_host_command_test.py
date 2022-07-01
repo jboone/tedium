@@ -85,13 +85,19 @@ def test_fast_writes(command: HostCommand):
 def test_ring_first_channel(command: HostCommand):
     import time
     while True:
-        command.register_write(0x0340, 0x05)
+        # Loop start
+        IDLE = 0x50
+        OUTGOING = 0xf0
+        INCOMING_FROM_FXO = 0x00
+        INCOMING_TO_FXO = 0xa0
+
+        print("off-hook")
+        command.register_write(0x0340, INCOMING_FROM_FXO | 0x05)    # IDLE
         time.sleep(2.0)
-        command.register_write(0x0340, 0x0f)
-        command.register_write(0x0341, 0x05)
-        time.sleep(2.0)
-        command.register_write(0x0341, 0x0f)
-        time.sleep(2.0)
+
+        print("on-hook")
+        command.register_write(0x0340, IDLE | 0x05)
+        time.sleep(4.0)
 
 command = HostCommand(intf)
 
