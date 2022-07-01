@@ -562,6 +562,7 @@ fn main() -> ! {
     let uart = Uart::new(0x8000_0000);
     let usb_in_int = USBEndpointIn::new(0x8009_0000);
     let usb_out = USBEndpointOut::new(0x800a_0000);
+    let usb_in = USBEndpointIn::new(0x800b_0000);
 
     uart.write_str("reset\n");
 
@@ -623,6 +624,13 @@ fn main() -> ! {
                                         uart.write_char(Uart::EQUAL);
                             
                                         if let Ok(value) = device_access.read(address) {
+                                            while !usb_in.is_idle() {
+
+                                            }
+                                            usb_in.clear_stall();
+                                            usb_in.write_fifo(value);
+                                            usb_in.transmit(EndpointNumber::FramerControl as u8);
+
                                             uart.write_hex_u8(value);
                                         } else {
                                             uart.write_str("xx");

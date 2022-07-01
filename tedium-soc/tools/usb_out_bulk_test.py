@@ -23,16 +23,25 @@ dev.set_interface_altsetting(
     alternate_setting=ALTERNATE_SETTING
 )
 
-ep = usb.util.find_descriptor(
+ep_out = usb.util.find_descriptor(
     intf,
     custom_match=lambda e:
         usb.util.endpoint_direction(e.bEndpointAddress) == usb.util.ENDPOINT_OUT \
         and usb.util.endpoint_address(e.bEndpointAddress) == ENDPOINT
 )
 
+ep_in = usb.util.find_descriptor(
+    intf,
+    custom_match=lambda e:
+        usb.util.endpoint_direction(e.bEndpointAddress) == usb.util.ENDPOINT_IN \
+        and usb.util.endpoint_address(e.bEndpointAddress) == ENDPOINT
+)
+
 while True:
     try:
-        ep.write(bytes([0x00, 0xfe, 0x01]))
+        ep_out.write(bytes([0x00, 0xfe, 0x01]))
+        result = ep_in.read(Descriptors.SOC_OUT_BYTES_MAX)
+        print(result)
         time.sleep(0.5)
     except usb.core.USBError as e:
         print(e)

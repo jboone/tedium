@@ -219,6 +219,7 @@ class Device(Elaboratable):
         soc = m.submodules.soc = DomainRenamer({"sync": "usb"})(self.soc)
         usb.add_endpoint(soc.usb_in_int_ep)
         usb.add_endpoint(soc.usb_out_ep)
+        usb.add_endpoint(soc.usb_in_ep)
 
         ###############################################################
         # Framer miscellaneous pin config

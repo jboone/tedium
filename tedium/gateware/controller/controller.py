@@ -146,6 +146,7 @@ class SoC(CPUSoC, Elaboratable):
 
     USB_IN_INT_ADDRESS  = 0x8009_0000
     USB_OUT_ADDRESS     = 0x800a_0000
+    USB_IN_ADDRESS      = 0x800b_0000
 
     FRAMER_REG_ADDRESS  = 0x8010_0000
 
@@ -247,6 +248,9 @@ class SoC(CPUSoC, Elaboratable):
 
         self.usb_out_ep = OutFIFOInterface(max_packet_size=Descriptors.SOC_OUT_BYTES_MAX)
         self.add_peripheral(self.usb_out_ep, as_submodule=False, addr=self.USB_OUT_ADDRESS)
+
+        self.usb_in_ep = InFIFOInterface(max_packet_size=Descriptors.SOC_IN_BYTES_MAX)
+        self.add_peripheral(self.usb_in_ep, as_submodule=False, addr=self.USB_IN_ADDRESS)
 
     @property
     def memory_map(self):
