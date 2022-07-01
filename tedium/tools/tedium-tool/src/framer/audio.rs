@@ -35,13 +35,13 @@ const CHANNELS: usize = 8;
 const TIMESLOTS_PER_CHANNEL: usize = 24;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-struct TimeslotAddress {
+pub struct TimeslotAddress {
     channel: usize,
     timeslot: usize,
 }
 
 impl TimeslotAddress {
-    fn new(channel: usize, timeslot: usize) -> Self {
+    pub fn new(channel: usize, timeslot: usize) -> Self {
         Self {
             channel,
             timeslot,
@@ -52,13 +52,13 @@ impl TimeslotAddress {
 ///////////////////////////////////////////////////////////////////////
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-enum ToneSource {
+pub enum ToneSource {
     DialTonePrecise,
     Ringback,
 }
 
 #[derive(Copy, Clone, Debug)]
-enum Patch {
+pub enum Patch {
     Idle,
     Input(TimeslotAddress),
     Tone(ToneSource),
@@ -114,7 +114,7 @@ impl Default for Patching {
 }
 
 #[derive(Copy, Clone, Debug)]
-enum ProcessorMessage {
+pub enum ProcessorMessage {
     Patch(TimeslotAddress, Patch),
 }
 

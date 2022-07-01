@@ -5,47 +5,47 @@ use console::{style, Color};
 use crate::framer::register::*;
 
 pub struct LoopbackCodeStatus {
-    rlcisrs: [RLCISRx; 8],
+    pub rlcisrs: [RLCISRx; 8],
 }
 
 pub struct HDLCControllerStatus {
-    dlsr: DLSRx,
-    rdlbcr: RDLBCR,
-    data: Vec<u8>,
-    ss7sr: SS7SRx,
+    pub dlsr: DLSRx,
+    pub rdlbcr: RDLBCR,
+    pub data: Vec<u8>,
+    pub ss7sr: SS7SRx,
 }
 
 pub struct HDLCStatus {
-    controller: [HDLCControllerStatus; 3],
+    pub controller: [HDLCControllerStatus; 3],
 }
 
 pub struct SlipStatus {
-    sbisr: SBISR,
+    pub sbisr: SBISR,
 }
 
 pub struct AlarmStatus {
-    aeisr: AEISR,
-    exzsr: EXZSR,
-    ciasr: CIASR,
+    pub aeisr: AEISR,
+    pub exzsr: EXZSR,
+    pub ciasr: CIASR,
 }
 
 pub struct T1FrameStatus {
-    fisr: FISR,
-    sig: Option<ReceiveSignalingStatus>,
+    pub fisr: FISR,
+    pub sig: Option<ReceiveSignalingStatus>,
 }
 
 pub struct ReceiveSignalingStatus {
-    rsars: [RSAR; 24],
+    pub rsars: [RSAR; 24],
 }
 
 pub struct FramerInterruptStatus {
-    channel_index: usize,
-    bisr: BISR,
-    lbcode: Option<LoopbackCodeStatus>,
-    hdlc: Option<HDLCStatus>,
-    slip: Option<SlipStatus>,
-    alarm: Option<AlarmStatus>,
-    t1frame: Option<T1FrameStatus>,
+    pub channel_index: usize,
+    pub bisr: BISR,
+    pub lbcode: Option<LoopbackCodeStatus>,
+    pub hdlc: Option<HDLCStatus>,
+    pub slip: Option<SlipStatus>,
+    pub alarm: Option<AlarmStatus>,
+    pub t1frame: Option<T1FrameStatus>,
 }
 
 ///////////////////////////////////////////////////////////////////////
