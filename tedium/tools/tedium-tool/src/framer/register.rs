@@ -891,7 +891,7 @@ pub struct RSSR {
 /// 
 #[bitfield(bits=8)]
 #[repr(u8)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct RSAR {
     #[skip] __: B4,
     pub A: B1,

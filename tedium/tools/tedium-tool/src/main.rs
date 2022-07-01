@@ -180,12 +180,31 @@ fn main() -> Result<()> {
 ///////////////////////////////////////////////////////////////////////
 
 fn monitor(receiver: Receiver<FramerInterruptMessage>) {
+    use crate::framer::register::RSAR;
+
+    let mut rx_sig_rsars = [[RSAR::new(); 24]; 8];
+
     while let Ok(m) = receiver.recv() {
         match m {
             FramerInterruptMessage::Interrupt(b, n) => {
                 let truncated = &b[0..n];
                 if let Ok(status) = FramerInterruptStatus::from_slice(truncated) {
                     print_framer_interrupt_status(&status);
+
+                    let channel_index = status.channel_index;
+
+                    if let Some(t1frame) = status.t1frame {
+                        if let Some(sig) = t1frame.sig {
+                            for timeslot_index in 0..24 {
+                                let now = sig.rsars[timeslot_index];
+                                let last = &mut rx_sig_rsars[channel_index][timeslot_index];
+                                if now != *last {
+                                    eprintln!("{channel_index}.{timeslot_index:02} {now:?}");
+                                    *last = now;
+                                }
+                            }
+                        }
+                    }
                 } else {
                     eprintln!("framer: interrupt: bad struct: {b:?}");
                 }
