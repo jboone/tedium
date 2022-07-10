@@ -12,6 +12,6 @@ mod usb;
 
 #[derive(Copy, Clone, Debug)]
 pub enum FramerEvent {
-    Interrupt([u8; usb::INTERRUPT_BYTES_MAX], usize),
+    Interrupt { data: [u8; usb::INTERRUPT_BYTES_MAX], length: usize },
     Digit(TimeslotAddress, DetectionEvent),
 }

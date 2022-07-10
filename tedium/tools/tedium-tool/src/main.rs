@@ -192,8 +192,8 @@ fn monitor(receiver: Receiver<FramerEvent>) {
 
     while let Ok(m) = receiver.recv() {
         match m {
-            FramerEvent::Interrupt(b, n) => {
-                let truncated = &b[0..n];
+            FramerEvent::Interrupt { data, length } => {
+                let truncated = &data[0..length];
                 if let Ok(status) = FramerInterruptStatus::from_slice(truncated) {
                     print_framer_interrupt_status(&status);
 
@@ -212,7 +212,7 @@ fn monitor(receiver: Receiver<FramerEvent>) {
                         }
                     }
                 } else {
-                    eprintln!("framer: interrupt: bad struct: {b:?}");
+                    eprintln!("framer: interrupt: bad struct: {data:?}");
                 }
             },
             FramerEvent::Digit(address, event) => {

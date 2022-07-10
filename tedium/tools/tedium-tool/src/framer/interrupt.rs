@@ -253,12 +253,43 @@ impl FramerInterruptHandler {
             sender,
         }
     }
+
+    fn send_event(&self, event: FramerEvent) {
+        if let Err(e) = self.sender.send(event) {
+            eprint!("error: data.sender.send: {:?}", e);
+        }
+    }
 }
 
 impl TransferHandler for FramerInterruptHandler {
     fn callback(&self, transfer: *mut ffi::libusb_transfer) {
         let status = unsafe { (*transfer).status };
-        let actual_length = unsafe { (*transfer).actual_length };
+        let actual_length = unsafe { (*transfer).actual_length }.try_into().unwrap();
+
+        // Copy out of the libusb transfer buffer, resubmit the transfer to the libusb
+        // stack, and then do whatever parsing we need to do.
+
+        // TODO: This gets called back even when the device endpoint
+        // reports a zero-length packet. Is there a better way, one which
+        // doesn't trouble the host with 1,000 packets a second, the vast
+        // majority of which require no work on the host's part?
+        let message = if status == LIBUSB_TRANSFER_COMPLETED && actual_length > 0 {
+            // TODO: Replace this and so much other transfer-related code
+            // with "safe" functions on the Transfer struct.
+            let buffer = unsafe {
+                let buffer = (*transfer).buffer;
+                slice::from_raw_parts_mut(buffer, actual_length)
+            };
+
+            let mut message = FramerEvent::Interrupt { data: [0u8; INTERRUPT_BYTES_MAX], length: actual_length };
+            if let FramerEvent::Interrupt { ref mut data, length } = message {
+                data[0..length].copy_from_slice(buffer);
+            }
+            
+            Some(message)
+        } else {
+            None
+        };
 
         let result = unsafe {
             ffi::libusb_submit_transfer(transfer)
@@ -268,26 +299,8 @@ impl TransferHandler for FramerInterruptHandler {
             e => eprintln!("IN: libusb_submit_transfer error: {e}"),
         }
 
-        // TODO: This gets called back even when the device endpoint
-        // reports a zero-length packet. Is there a better way, one which
-        // doesn't trouble the host with 1,000 packets a second, the vast
-        // majority of which require no work on the host's part?
-        if status == LIBUSB_TRANSFER_COMPLETED && actual_length > 0 {
-            let actual_length = actual_length.try_into().unwrap();
-            let mut data = [0u8; INTERRUPT_BYTES_MAX];
-            
-            // TODO: Replace this and so much other transfer-related code
-            // with "safe" functions on the Transfer struct.
-            let buffer = unsafe {
-                let buffer = (*transfer).buffer;
-                slice::from_raw_parts_mut(buffer, actual_length)
-            };
-
-            data[0..actual_length].copy_from_slice(buffer);
-            let message = FramerEvent::Interrupt(data, actual_length);
-            if let Err(e) = self.sender.send(message) {
-                eprint!("error: data.sender.send: {:?}", e);
-            }
+        if let Some(message) = message {
+            self.send_event(message);
         }
     }
 }
