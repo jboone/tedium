@@ -9,7 +9,7 @@ const IGNR: u8 = 0x23;
 
 const DEFAULTS_XXXX: [Row; 1] = [
     // At power up, I read: 0fe0: 00 00 00 00 00 00 00 ff ff 01 00 00 ff 00 00 00
-    Row(0xfe0, [0x00, 0x00, 0x00, NOOP, 0x00, NOOP, NOOP, NOOP, NOOP, 0x01, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP]),
+    Row(0xfe0, [0x00, 0x00, 0x00, NOOP, 0x00, NOOP, NOOP, NOOP, NOOP, 0x01, READ, NOOP, NOOP, NOOP, NOOP, NOOP]),
 ];
 
 const DEFAULTS_NXXX: [Row; 30] = [
