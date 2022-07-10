@@ -3,7 +3,7 @@
 use std::{slice, time::Duration, marker::PhantomData, fmt, sync::{Mutex, Arc}};
 
 use crossbeam::channel::Sender;
-use rusb::{self, UsbContext, constants::{LIBUSB_ENDPOINT_IN, LIBUSB_TRANSFER_COMPLETED}};
+use rusb::{self, UsbContext, constants::{LIBUSB_ENDPOINT_IN, LIBUSB_TRANSFER_COMPLETED, LIBUSB_SUCCESS}};
 use rusb::ffi;
 
 use crate::framer::usb::{EndpointNumber, InterfaceNumber, Transfer, INTERRUPT_BYTES_MAX, from_libusb, CallbackWrapper};
@@ -547,10 +547,10 @@ impl FramerInterruptThread {
         
         let handler = Arc::new(Mutex::new(FramerInterruptHandler::new(sender)));
         
-        for i in 0..TRANSFERS_COUNT {
+        for _ in 0..TRANSFERS_COUNT {
             let transfer = Transfer::new_interrupt_transfer(
                 device_handle.clone(),
-                LIBUSB_ENDPOINT_IN | EndpointNumber::Interrupt as u8,
+                endpoint,
                 INTERRUPT_BYTES_MAX,
                 0,
                 Box::new(CallbackWrapper::new(handler.clone())),

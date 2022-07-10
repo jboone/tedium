@@ -97,7 +97,7 @@ impl DetectionStateMachine {
                       ( false,     _,     _) |
                       (     _, false,     _) => (S3, false),    // !length + !same => S3
                       (  true,  true,     _) => (S3,  true),    // length & same => S3
-                      _  => (self.state, false),
+                    //   _  => (self.state, false),
                 }
             },
             S3 => {

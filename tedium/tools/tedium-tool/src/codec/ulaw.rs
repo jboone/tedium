@@ -45,7 +45,10 @@ fn ulaw_encode_cruddy(linear: f32) -> u8 {
 
 ///////////////////////////////////////////////////////////////////////
 
-fn encode_ulaw_g191(linear: i16) -> u8 {
+/// G.191 reference implementation. Accurate but slow.
+/// 
+#[cfg(test)]
+pub fn encode_ulaw_g191(linear: i16) -> u8 {
     // Using G.191 code as a reference, since G.711 is a little unclear in spots.
 
     /* -------------------------------------------------------------------- */
@@ -81,7 +84,10 @@ fn encode_ulaw_g191(linear: i16) -> u8 {
     sign_bit | (high_nibble << 4) | low_nibble
 }
 
-fn decode_ulaw_g191(code: u8) -> i16 {
+/// G.191 reference implementation. Accurate but slow.
+/// 
+#[cfg(test)]
+pub fn decode_ulaw_g191(code: u8) -> i16 {
     let sign = if code < 0x80 { -1i16 } else { 1 };  /* sign-bit = 1 for positiv values */
 
     let mantissa = code ^ 0xff;      /* 1's complement of input value */

@@ -80,9 +80,7 @@ pub struct CSR {
 
 impl Default for CSR {
     fn default() -> Self {
-        Self {
-            bytes: [0b0001_0001],
-        }
+        CSR::from(0b0001_0001)
     }
 }
 

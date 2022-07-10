@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::mem::size_of;
 use std::slice;
 use std::sync::{Arc, Mutex};
-use std::time::{Instant, Duration};
+use std::time::Instant;
 use std::thread;
 
 use crate::codec::ulaw;
@@ -16,9 +16,10 @@ use audio_thread_priority::promote_current_thread_to_real_time;
 use bytemuck::{Pod, Zeroable};
 use crossbeam::channel::{unbounded, Sender, Receiver};
 use ringbuf::{RingBuffer, Consumer, Producer};
-use rusb::constants::LIBUSB_TRANSFER_COMPLETED;
 use rusb::ffi::{libusb_set_iso_packet_lengths, libusb_get_iso_packet_buffer};
 use rusb::{ffi, UsbContext};
+use rusb::constants::{LIBUSB_TRANSFER_COMPLETED, LIBUSB_SUCCESS};
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -127,8 +128,6 @@ struct AudioProcessor {
 
 impl AudioProcessor {
     fn new(message_receiver: Receiver<ProcessorMessage>) -> Self {
-        use ToneSource::*;
-
         let mut tone_plant: HashMap<ToneSource, Box<dyn ToneGenerator>> = HashMap::new();
         tone_plant.insert(ToneSource::DialTonePrecise, Box::new(DualToneGenerator::new(350.0, 440.0)));
         tone_plant.insert(ToneSource::Ringback, Box::new(DualToneGenerator::new(440.0, 480.0)));
@@ -366,14 +365,18 @@ impl LoopbackFrameHandler {
     }
 }
 
+/// Report received from framer over USB, after each frame of data.
+/// Structure must match the one produced by the HDL on the FPGA.
 #[derive(Copy, Clone, Debug)]
 #[repr(packed)]
+#[allow(dead_code)]
 struct RxFrameReport {
     frame_count: u32,
 }
 
 #[derive(Copy, Clone, Debug)]
 #[repr(packed)]
+#[allow(dead_code)]
 struct RxFrame {
     frame: Frame,
     report: RxFrameReport,
@@ -382,8 +385,12 @@ struct RxFrame {
 unsafe impl Zeroable for RxFrame {}
 unsafe impl Pod for RxFrame {}
 
+/// Report received from framer over USB, ideally at every USB
+/// SOF (start-of-frame) interval. Structure must match the one
+/// produced by the HDL on the FPGA.
 #[derive(Copy, Clone, Debug)]
 #[repr(packed)]
+#[allow(dead_code)]
 struct RxUSBReport {
     sof_count: u32,
     fifo_rx_level: u8,
@@ -398,6 +405,7 @@ unsafe impl Pod for RxUSBReport {}
 
 #[derive(Copy, Clone, Debug)]
 #[repr(packed)]
+#[allow(dead_code)]
 struct TxUSBReport {
     frame_count: u32,
 }
@@ -407,12 +415,14 @@ unsafe impl Pod for TxUSBReport {}
 
 #[derive(Copy, Clone, Debug)]
 #[repr(packed)]
+#[allow(dead_code)]
 struct TxFrameReport {
     frame_count: u32,
 }
 
 #[derive(Copy, Clone, Debug)]
 #[repr(packed)]
+#[allow(dead_code)]
 struct TxFrame {
     report: TxFrameReport,
     frame: Frame,
@@ -564,7 +574,7 @@ impl RxPacketProcessor {
                 frame: frame_in.frame,
                 frame_count: frame_in.report.frame_count,
             };
-            if let Err(e) = self.unprocessed_frames_producer.push(frame) {
+            if let Err(_) = self.unprocessed_frames_producer.push(frame) {
                 self.framer_cumulative_statistics.ringbuf_full_drop_count += 1;
             }
         }
@@ -572,7 +582,9 @@ impl RxPacketProcessor {
 }
 
 impl LoopbackFrameHandler {
-     fn handle_in(&mut self, transfer: *mut ffi::libusb_transfer) {
+    fn handle_in(&mut self, transfer: *mut ffi::libusb_transfer) {
+        // TODO: Refactor stuff like this into code that only does the USB
+        // work!
         let transfer_status = unsafe { (*transfer).status };
         if transfer_status != LIBUSB_TRANSFER_COMPLETED {
             eprintln!("IN: transfer.status = {transfer_status}");
@@ -655,7 +667,7 @@ impl LoopbackFrameHandler {
             };
 
             let (usb_report, buffer) = buffer.split_at_mut(size_of::<TxUSBReport>());
-            let usb_report = bytemuck::from_bytes_mut::<TxUSBReport>(usb_report);
+            let _usb_report = bytemuck::from_bytes_mut::<TxUSBReport>(usb_report);
             // usb_report.frame_count = ?;
 
             for frame in buffer.chunks_exact_mut(size_of::<TxFrame>()) {
@@ -670,6 +682,8 @@ impl LoopbackFrameHandler {
             }
         }
 
+        // TODO: Refactor stuff like this into code that only does the USB
+        // work!
         let result = unsafe {
             ffi::libusb_submit_transfer(transfer)
         };

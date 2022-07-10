@@ -1,7 +1,7 @@
-use std::{sync::{Arc, Mutex}, ptr::NonNull};
+use std::{sync::{Arc, Mutex}, ptr::NonNull, slice};
 
 use libc::c_uint;
-use rusb::{ffi, Error, UsbContext, DeviceHandle};
+use rusb::{ffi, Error, UsbContext, DeviceHandle, constants::*};
 
 // TODO: Keep synchronized with `gateware/descriptors_vendor.py`.
 #[derive(Copy, Clone, Debug)]
@@ -36,8 +36,6 @@ const FRAMER_CONTROL_BYTES_MAX: usize = 512;
 // TODO: Borrowed from rusb::ffi, because it's pub(crate).
 #[doc(hidden)]
 pub fn from_libusb(err: i32) -> rusb::Error {
-    use rusb::ffi::constants::*;
-
     match err {
         LIBUSB_ERROR_IO => Error::Io,
         LIBUSB_ERROR_INVALID_PARAM => Error::InvalidParam,
