@@ -603,7 +603,6 @@ pub(crate) fn open_device(context: &mut rusb::Context) -> Result<rusb::DeviceHan
 pub struct Device {
     handle: rusb::DeviceHandle<rusb::Context>,
     timeout: Duration,
-    interrupt_endpoint_address: u8,
 }
 
 pub type Result<T> = rusb::Result<T>;
@@ -616,7 +615,6 @@ impl Device {
                 handle,
                 // spans,
                 timeout: Duration::from_secs(1),
-                interrupt_endpoint_address: LIBUSB_ENDPOINT_IN | 9,
         })
     }
 
