@@ -1,6 +1,5 @@
 
 pub mod audio;
-pub mod default;
 pub mod device;
 pub mod dump;
 pub mod interrupt;
