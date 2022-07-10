@@ -286,7 +286,7 @@ impl TransferHandler for FramerInterruptHandler {
                 data: [0u8; INTERRUPT_BYTES_MAX],
                 length: actual_length
             };
-            if let FramerEvent::Interrupt { timestamp, ref mut data, length } = message {
+            if let FramerEvent::Interrupt { timestamp: _, ref mut data, length } = message {
                 data[0..length].copy_from_slice(buffer);
             }
             
