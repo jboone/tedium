@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use crate::detector::DetectionEvent;
 
 use self::audio::TimeslotAddress;
@@ -12,6 +14,6 @@ mod usb;
 
 #[derive(Copy, Clone, Debug)]
 pub enum FramerEvent {
-    Interrupt { data: [u8; usb::INTERRUPT_BYTES_MAX], length: usize },
+    Interrupt { timestamp: Instant, data: [u8; usb::INTERRUPT_BYTES_MAX], length: usize },
     Digit(TimeslotAddress, DetectionEvent),
 }

@@ -1,4 +1,4 @@
-use std::{io::{Read, Cursor, self}, slice, sync::{Arc, Mutex}};
+use std::{io::{Read, Cursor, self}, slice, sync::{Arc, Mutex}, time::Instant};
 
 use crossbeam::channel::Sender;
 
@@ -281,8 +281,12 @@ impl TransferHandler for FramerInterruptHandler {
                 slice::from_raw_parts_mut(buffer, actual_length)
             };
 
-            let mut message = FramerEvent::Interrupt { data: [0u8; INTERRUPT_BYTES_MAX], length: actual_length };
-            if let FramerEvent::Interrupt { ref mut data, length } = message {
+            let mut message = FramerEvent::Interrupt {
+                timestamp: Instant::now(),
+                data: [0u8; INTERRUPT_BYTES_MAX],
+                length: actual_length
+            };
+            if let FramerEvent::Interrupt { timestamp, ref mut data, length } = message {
                 data[0..length].copy_from_slice(buffer);
             }
             

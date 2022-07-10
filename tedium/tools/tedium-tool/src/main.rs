@@ -1,5 +1,5 @@
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand, Args, ArgEnum};
 
@@ -8,6 +8,7 @@ use framer::FramerEvent;
 use framer::interrupt::FramerInterruptThread;
 use framer::dump::{registers_dump_raw, registers_dump_global, registers_dump_channel};
 use framer::interrupt::{FramerInterruptStatus, print_framer_interrupt_status};
+use framer::register::RSAR;
 use framer::test::{set_test_mode_liu, LIUTestMode, set_test_mode_framer, FramerTestMode};
 
 use crate::framer::audio::{TimeslotAddress, ProcessorMessage, Patch, ToneSource};
@@ -185,14 +186,45 @@ fn main() -> Result<()> {
 
 ///////////////////////////////////////////////////////////////////////
 
-fn monitor(receiver: Receiver<FramerEvent>) {
-    use crate::framer::register::RSAR;
+#[derive(Copy, Clone, Debug)]
+struct LineState {
+    timestamp: Instant,
+    abcd: u8,
+}
 
-    let mut rx_sig_rsars = [[RSAR::new(); 24]; 8];
+impl Default for LineState {
+    fn default() -> Self {
+        Self {
+            timestamp: Instant::now(),
+            abcd: 0b0101,
+        }
+    }
+}
+
+impl LineState {
+    fn set_state(&mut self, timestamp: Instant, rsar: RSAR) -> Option<(Duration, bool)> {
+        let new_abcd = (rsar.A() << 3) | (rsar.B() << 2) | (rsar.C() << 1) | (rsar.D() << 0);
+        if new_abcd != self.abcd {
+            let duration = timestamp - self.timestamp;
+            self.timestamp = timestamp;
+            self.abcd = new_abcd;
+            Some((duration, self.off_hook()))
+        } else {
+            None
+        }
+    }
+
+    fn off_hook(&self) -> bool {
+        self.abcd & 0x0c == 0b1100
+    }
+}
+
+fn monitor(receiver: Receiver<FramerEvent>) {
+    let mut line_state = [[LineState::default(); 24]; 8];
 
     while let Ok(m) = receiver.recv() {
         match m {
-            FramerEvent::Interrupt { data, length } => {
+            FramerEvent::Interrupt { timestamp, data, length } => {
                 let truncated = &data[0..length];
                 if let Ok(status) = FramerInterruptStatus::from_slice(truncated) {
                     print_framer_interrupt_status(&status);
@@ -202,11 +234,9 @@ fn monitor(receiver: Receiver<FramerEvent>) {
                     if let Some(t1frame) = status.t1frame {
                         if let Some(sig) = t1frame.sig {
                             for timeslot_index in 0..24 {
-                                let now = sig.rsars[timeslot_index];
-                                let last = &mut rx_sig_rsars[channel_index][timeslot_index];
-                                if now != *last {
-                                    eprintln!("{channel_index}.{timeslot_index:02} {now:?}");
-                                    *last = now;
+                                let rsar = sig.rsars[timeslot_index];
+                                if let Some((duration, off_hook)) = line_state[channel_index][timeslot_index].set_state(timestamp, rsar) {
+                                    eprintln!("{channel_index}.{timeslot_index:02} {duration:?} {off_hook:?}");
                                 }
                             }
                         }
