@@ -11,7 +11,7 @@ use framer::interrupt::{FramerInterruptStatus, print_framer_interrupt_status};
 use framer::register::RSAR;
 use framer::test::{set_test_mode_liu, LIUTestMode, set_test_mode_framer, FramerTestMode};
 
-use crate::framer::audio::{TimeslotAddress, ProcessorMessage, Patch, ToneSource};
+use crate::framer::audio::{TimeslotAddress, ProcessorMessage, Patch, ToneSource, DebugMessage};
 use crate::framer::device::{Device, Result};
 
 mod codec;
@@ -122,6 +122,7 @@ fn main() -> Result<()> {
         Commands::Monitor(_) => {
             let (patch_sender, patch_receiver) = unbounded();
             let (event_sender, event_receiver) = unbounded();
+            let (debug_sender, debug_receiver) = unbounded();
 
             thread::Builder::new()
                 .name("fr_int".to_string())
@@ -140,13 +141,44 @@ fn main() -> Result<()> {
                 .spawn({
                     let event_sender = event_sender.clone();
                     move || {
-                        if let Err(e) = framer::audio::pump_loopback(patch_receiver, event_sender) {
+                        if let Err(e) = framer::audio::pump_loopback(patch_receiver, event_sender, debug_sender) {
                             eprintln!("error: audio pump: {:?}", e);
                         }
                         eprintln!("done: audio pump");
                     }
                 }).unwrap();
 
+            thread::Builder::new()
+                .name("fr_dbg".into())
+                .spawn(move || {
+                    let instant_start = Instant::now();
+                    let mut tx_fifo_level_range = (0, 0);
+
+                    for message in debug_receiver {
+                        match message {
+                            DebugMessage::TxFIFORange(r) => {
+                                if r != tx_fifo_level_range {
+                                    let elapsed = instant_start.elapsed();
+
+                                    let mut range_str = ['\u{2500}'; 32];
+                                    range_str[r.0 as usize] = '\u{2524}';
+                                    range_str[r.1 as usize] = '\u{251c}';
+                                    for i in (r.0 as usize)+1..(r.1 as usize) {
+                                        range_str[i] = ' ';
+                                    }
+                                    let range_str = range_str.iter().cloned().collect::<String>();
+
+                                    eprint!("{:6}.{:06}: {}\n", elapsed.as_secs(), elapsed.subsec_micros(), range_str);
+                                    tx_fifo_level_range = r;
+                                }
+                            },
+                            DebugMessage::FramerStatistics(p, c) => {
+                                eprint!("{p:?} {c:?}\n");
+                            },
+                        }
+                    }
+                }).unwrap();
+                
             thread::Builder::new()
                 .name("repatch".into())
                 .spawn(move || {

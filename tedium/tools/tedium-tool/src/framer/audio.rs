@@ -204,7 +204,7 @@ impl AudioProcessor {
 
 ///////////////////////////////////////////////////////////////////////
 
-pub fn pump_loopback(patch_receiver: Receiver<ProcessorMessage>, event_sender: Sender<FramerEvent>) -> Result<(), PumpError> {
+pub fn pump_loopback(patch_receiver: Receiver<ProcessorMessage>, event_sender: Sender<FramerEvent>, debug_sender: Sender<DebugMessage>) -> Result<(), PumpError> {
     let mut context = rusb::Context::new()?;
 
     let mut device = open_device(&mut context)?;
@@ -230,7 +230,6 @@ pub fn pump_loopback(patch_receiver: Receiver<ProcessorMessage>, event_sender: S
     let mut transfers_in: Vec<Transfer> = Vec::new();
     let mut transfers_out: Vec<Transfer> = Vec::new();
 
-    let (debug_sender, debug_receiver) = unbounded();
     let handler = Arc::new(Mutex::new(LoopbackFrameHandler::new(patch_receiver, debug_sender, event_sender)));
 
     for _ in 0..TRANSFERS_COUNT {
@@ -259,37 +258,6 @@ pub fn pump_loopback(patch_receiver: Receiver<ProcessorMessage>, event_sender: S
         transfers_out.push(transfer_out);
     }
 
-    thread::Builder::new()
-        .name("debug".into())
-        .spawn(move || {
-            let instant_start = Instant::now();
-            let mut tx_fifo_level_range = (0, 0);
-
-            for message in debug_receiver {
-                match message {
-                    DebugMessage::TxFIFORange(r) => {
-                        if r != tx_fifo_level_range {
-                            let elapsed = instant_start.elapsed();
-
-                            let mut range_str = ['\u{2500}'; 32];
-                            range_str[r.0 as usize] = '\u{2524}';
-                            range_str[r.1 as usize] = '\u{251c}';
-                            for i in (r.0 as usize)+1..(r.1 as usize) {
-                                range_str[i] = ' ';
-                            }
-                            let range_str = range_str.iter().cloned().collect::<String>();
-
-                            eprint!("{:6}.{:06}: {}\n", elapsed.as_secs(), elapsed.subsec_micros(), range_str);
-                            tx_fifo_level_range = r;
-                        }
-                    },
-                    DebugMessage::FramerStatistics(p, c) => {
-                        eprint!("{p:?} {c:?}\n");
-                    },
-                }
-            }
-        }).unwrap();
-
     // The current thread will be the one that handles all USB transfer callbacks.
     // So let's promote it to run more frequently and at a higher priority than
     // usual.
@@ -309,7 +277,7 @@ pub fn pump_loopback(patch_receiver: Receiver<ProcessorMessage>, event_sender: S
 }
 
 #[derive(Copy, Clone, Debug)]
-enum DebugMessage {
+pub enum DebugMessage {
     TxFIFORange((u8, u8)),
     FramerStatistics(FramerPeriodicStatistics, FramerCumulativeStatistics),
 }
@@ -474,7 +442,7 @@ const RX_FIFO_DEPTH: usize = 8;
 const TX_FIFO_DEPTH: usize = 32;
 
 #[derive(Copy, Clone, Debug)]
-struct FramerPeriodicStatistics {
+pub struct FramerPeriodicStatistics {
     rx_fifo_level_histogram: [u32; RX_FIFO_DEPTH],
     tx_fifo_level_histogram: [u32; TX_FIFO_DEPTH],
     frame_count: u32,
@@ -490,7 +458,7 @@ impl Default for FramerPeriodicStatistics {
     }
 }
 #[derive(Copy, Clone, Debug)]
-struct FramerCumulativeStatistics {
+pub struct FramerCumulativeStatistics {
     rx_fifo_underflow_count: u16,
     tx_fifo_overflow_count: u16,
     sof_discontinuity_count: u32,
