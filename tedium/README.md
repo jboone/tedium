@@ -69,18 +69,15 @@ status clock
 
 # Configuration
 
-To run `tedium-tool`, you need `python3-usb` (Debian/Ubuntu).
+To run `tedium-tool`, you need the latest stable Rust language installation.
 
-You'll also likely want to add a `udev` rule to allow non-superuser access to the Tedium USB interface.
+You'll also likely want to add a `udev` rule to allow non-superuser access to the Tedium USB interface. Depending on your distribution, you'll want to use the `debian` or `arch` udev rules.
 
 ```bash
-$ sudo vi /etc/udev/rules.d/99-luna.rules
-```
-
-Edit the file to contain:
-
-```udev
-ATTRS{idVendor}=="16d0", ATTRS{idProduct}=="0f3b", MODE="0666", GROUP="plugdev", TAG+="uaccess"
+# Ubuntu
+$ sudo cp 99-tedium-ubuntu.rules /etc/udev/rules.d/
+# Arch
+$ sudo cp 99-tedium-arch.rules /etc/udev/rules.d/
 ```
 
 Then reload the rules:
@@ -95,7 +92,7 @@ $ sudo udevadm trigger
 __TODO__: These are notes from my temporary setup. Fill this out when everything stabilizes a bit.
 
 ```bash
-PYTHONPATH=.:../amaranth:../amaranth-soc:./amaranth-stdio:../lambdasoc:../luna:../minerva python applets/tedium-fpga
+PYTHONPATH=../luna:../lambdasoc:../minerva:. LUNA_AVOID_BLOCKRAM=1 applets/tedium-fpga
 ```
 
 To reload the gateware on the FPGA (because something crashed or it otherwise can't be negotiated with), this saves having to rebuild the whole bitstream:
@@ -103,6 +100,9 @@ To reload the gateware on the FPGA (because something crashed or it otherwise ca
 ```bash
 $ openocd -f build/design/top-openocd.cfg -c 'init; svf -quiet build/design/top.svf; exit'
 ```
+
+Uploading the firmware onto the SoC: See the `tedium-soc` directory README.md.
+
 
 # Framer/LIU Testing
 
