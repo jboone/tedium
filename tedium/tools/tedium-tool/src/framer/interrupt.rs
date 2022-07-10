@@ -1,8 +1,13 @@
-use std::io::{Read, Cursor, Result};
+use std::{io::{Read, Cursor, self}, slice, sync::{Arc, Mutex}};
+
+use crossbeam::channel::Sender;
 
 use console::{style, Color};
+use rusb::{ffi, constants::*, UsbContext};
 
-use crate::framer::register::*;
+use crate::framer::{register::*, device::{open_device}, usb::{EndpointNumber, InterfaceNumber, Transfer, CallbackWrapper, from_libusb}};
+
+use super::{FramerEvent, usb::{TransferHandler, INTERRUPT_BYTES_MAX}, device};
 
 pub struct LoopbackCodeStatus {
     pub rlcisrs: [RLCISRx; 8],
@@ -51,14 +56,14 @@ pub struct FramerInterruptStatus {
 ///////////////////////////////////////////////////////////////////////
 
 impl FramerInterruptStatus {
-    pub fn from_slice(b: &[u8]) -> Result<Self> {
+    pub fn from_slice(b: &[u8]) -> io::Result<Self> {
         let mut r = Cursor::new(b);
         let result = Self::from_read(&mut r);
         assert_eq!(b.len() as u64, r.position());
         result
     }
 
-    fn from_read(r: &mut impl Read) -> Result<Self> {
+    fn from_read(r: &mut impl Read) -> io::Result<Self> {
         let mut channel_index = [0u8; 1];
         r.read(&mut channel_index)?;
         let channel_index = channel_index[0] as usize;
@@ -118,7 +123,7 @@ impl FramerInterruptStatus {
 }
 
 impl LoopbackCodeStatus {
-    fn from_read(r: &mut impl Read) -> Result<Self> {
+    fn from_read(r: &mut impl Read) -> io::Result<Self> {
         let mut rlcisrs = [0u8; 8];
         r.read(&mut rlcisrs)?;
         let rlcisrs = rlcisrs.map(|v| RLCISRx::from(v));
@@ -130,7 +135,7 @@ impl LoopbackCodeStatus {
 }
 
 impl HDLCStatus {
-    fn from_read(r: &mut impl Read) -> Result<Self> {
+    fn from_read(r: &mut impl Read) -> io::Result<Self> {
         Ok(Self {
             controller: [
                 HDLCControllerStatus::from_read(r)?,
@@ -142,7 +147,7 @@ impl HDLCStatus {
 }
 
 impl HDLCControllerStatus {
-    fn from_read(r: &mut impl Read) -> Result<Self> {
+    fn from_read(r: &mut impl Read) -> io::Result<Self> {
         let mut dlsr = [0u8; 1];
         r.read(&mut dlsr)?;
         let dlsr = DLSRx::from(dlsr[0]);
@@ -170,7 +175,7 @@ impl HDLCControllerStatus {
 }
 
 impl SlipStatus {
-    fn from_read(r: &mut impl Read) -> Result<Self> {
+    fn from_read(r: &mut impl Read) -> io::Result<Self> {
         let mut sbisr = [0u8; 1];
         r.read(&mut sbisr)?;
         let sbisr = SBISR::from(sbisr[0]);
@@ -182,7 +187,7 @@ impl SlipStatus {
 }
 
 impl AlarmStatus {
-    fn from_read(r: &mut impl Read) -> Result<Self> {
+    fn from_read(r: &mut impl Read) -> io::Result<Self> {
         let mut buffer = [0u8; 3];
         r.read(&mut buffer)?;
         
@@ -199,7 +204,7 @@ impl AlarmStatus {
 }
 
 impl T1FrameStatus {
-    fn from_read(r: &mut impl Read) -> Result<Self> {
+    fn from_read(r: &mut impl Read) -> io::Result<Self> {
         let mut fisr = [0u8; 1];
         r.read(&mut fisr)?;
         let fisr = FISR::from(fisr[0]);
@@ -218,7 +223,7 @@ impl T1FrameStatus {
 }
 
 impl ReceiveSignalingStatus {
-    fn from_read(r: &mut impl Read) -> Result<Self> {
+    fn from_read(r: &mut impl Read) -> io::Result<Self> {
         let mut buffer = [0u8; 12];
         r.read(&mut buffer)?;
 
@@ -233,6 +238,112 @@ impl ReceiveSignalingStatus {
         Ok(Self {
             rsars,
         })
+    }
+}
+
+///////////////////////////////////////////////////////////////////////
+
+struct FramerInterruptHandler {
+    sender: Sender<FramerEvent>,
+}
+
+impl FramerInterruptHandler {
+    fn new(sender: Sender<FramerEvent>) -> Self {
+        Self {
+            sender,
+        }
+    }
+}
+
+impl TransferHandler for FramerInterruptHandler {
+    fn callback(&self, transfer: *mut ffi::libusb_transfer) {
+        let status = unsafe { (*transfer).status };
+        let actual_length = unsafe { (*transfer).actual_length };
+
+        let result = unsafe {
+            ffi::libusb_submit_transfer(transfer)
+        };
+        match result {
+            LIBUSB_SUCCESS => {},
+            e => eprintln!("IN: libusb_submit_transfer error: {e}"),
+        }
+
+        // TODO: This gets called back even when the device endpoint
+        // reports a zero-length packet. Is there a better way, one which
+        // doesn't trouble the host with 1,000 packets a second, the vast
+        // majority of which require no work on the host's part?
+        if status == LIBUSB_TRANSFER_COMPLETED && actual_length > 0 {
+            let actual_length = actual_length.try_into().unwrap();
+            let mut data = [0u8; INTERRUPT_BYTES_MAX];
+            
+            // TODO: Replace this and so much other transfer-related code
+            // with "safe" functions on the Transfer struct.
+            let buffer = unsafe {
+                let buffer = (*transfer).buffer;
+                slice::from_raw_parts_mut(buffer, actual_length)
+            };
+
+            data[0..actual_length].copy_from_slice(buffer);
+            let message = FramerEvent::Interrupt(data, actual_length);
+            if let Err(e) = self.sender.send(message) {
+                eprint!("error: data.sender.send: {:?}", e);
+            }
+        }
+    }
+}
+
+pub struct FramerInterruptThread {
+    
+}
+
+impl FramerInterruptThread {
+    pub fn run(sender: Sender<FramerEvent>) -> device::Result<()> {
+        let mut context = rusb::Context::new()?;
+
+        let mut device = open_device(&mut context)?;
+
+        let endpoint = LIBUSB_ENDPOINT_IN | EndpointNumber::Interrupt as u8;
+
+        device.claim_interface(InterfaceNumber::Interrupt as u8)?;
+        device.set_alternate_setting(InterfaceNumber::Interrupt as u8, 0)?;
+
+        let device = Arc::new(device);
+
+        let device_handle = &device;
+
+        const TRANSFERS_COUNT: usize = 4;
+
+        let mut transfers: Vec<Transfer> = Vec::new();
+        
+        let handler = Arc::new(Mutex::new(FramerInterruptHandler::new(sender)));
+        
+        for _ in 0..TRANSFERS_COUNT {
+            let transfer = Transfer::new_interrupt_transfer(
+                device_handle.clone(),
+                endpoint,
+                INTERRUPT_BYTES_MAX,
+                0,
+                Box::new(CallbackWrapper::new(handler.clone())),
+            );
+
+            transfer.submit();
+            transfers.push(transfer);
+        }
+
+        let context = device.context();
+
+        loop {
+            let result = unsafe {
+                ffi::libusb_handle_events(context.as_raw())
+            };
+            if result != 0 {
+                eprintln!("error: libusb_handle_events: {:?}", result);
+                // TODO: I wish I could return an official rusb::Error here,
+                // but the function that turns a raw i32 result into an Error
+                // is private to the rusb crate.
+                return Err(from_libusb(result));
+            }
+        }
     }
 }
 

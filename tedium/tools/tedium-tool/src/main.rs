@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand, Args, ArgEnum};
 
 use crossbeam::channel::{unbounded, Receiver};
 use framer::FramerEvent;
-use framer::device::FramerInterruptThread;
+use framer::interrupt::FramerInterruptThread;
 use framer::dump::{registers_dump_raw, registers_dump_global, registers_dump_channel};
 use framer::interrupt::{FramerInterruptStatus, print_framer_interrupt_status};
 use framer::test::{set_test_mode_liu, LIUTestMode, set_test_mode_framer, FramerTestMode};

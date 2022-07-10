@@ -1,16 +1,10 @@
 #![allow(non_snake_case)]
 
-use std::{slice, time::Duration, marker::PhantomData, fmt, sync::{Mutex, Arc}};
+use std::{time::Duration, marker::PhantomData, fmt};
 
-use crossbeam::channel::Sender;
-use rusb::{self, UsbContext, constants::{LIBUSB_ENDPOINT_IN, LIBUSB_TRANSFER_COMPLETED, LIBUSB_SUCCESS}};
-use rusb::ffi;
-
-use crate::framer::usb::{EndpointNumber, InterfaceNumber, Transfer, INTERRUPT_BYTES_MAX, from_libusb, CallbackWrapper};
+use rusb::{self, UsbContext};
 
 use crate::framer::register::*;
-
-use super::{usb::TransferHandler, FramerEvent};
 
 pub(crate) type RegisterAddress = u16;
 pub(crate) type RegisterValue = u8;
@@ -462,112 +456,6 @@ impl<'a> Iterator for Channels<'a> {
             Some(result)
         } else {
             None
-        }
-    }
-}
-
-///////////////////////////////////////////////////////////////////////
-
-struct FramerInterruptHandler {
-    sender: Sender<FramerEvent>,
-}
-
-impl FramerInterruptHandler {
-    fn new(sender: Sender<FramerEvent>) -> Self {
-        Self {
-            sender,
-        }
-    }
-}
-
-impl TransferHandler for FramerInterruptHandler {
-    fn callback(&self, transfer: *mut ffi::libusb_transfer) {
-        let status = unsafe { (*transfer).status };
-        let actual_length = unsafe { (*transfer).actual_length };
-
-        let result = unsafe {
-            ffi::libusb_submit_transfer(transfer)
-        };
-        match result {
-            LIBUSB_SUCCESS => {},
-            e => eprintln!("IN: libusb_submit_transfer error: {e}"),
-        }
-
-        // TODO: This gets called back even when the device endpoint
-        // reports a zero-length packet. Is there a better way, one which
-        // doesn't trouble the host with 1,000 packets a second, the vast
-        // majority of which require no work on the host's part?
-        if status == LIBUSB_TRANSFER_COMPLETED && actual_length > 0 {
-            let actual_length = actual_length.try_into().unwrap();
-            let mut data = [0u8; INTERRUPT_BYTES_MAX];
-            
-            // TODO: Replace this and so much other transfer-related code
-            // with "safe" functions on the Transfer struct.
-            let buffer = unsafe {
-                let buffer = (*transfer).buffer;
-                slice::from_raw_parts_mut(buffer, actual_length)
-            };
-
-            data[0..actual_length].copy_from_slice(buffer);
-            let message = FramerEvent::Interrupt(data, actual_length);
-            if let Err(e) = self.sender.send(message) {
-                eprint!("error: data.sender.send: {:?}", e);
-            }
-        }
-    }
-}
-
-pub struct FramerInterruptThread {
-    
-}
-
-impl FramerInterruptThread {
-    pub fn run(sender: Sender<FramerEvent>) -> Result<()> {
-        let mut context = rusb::Context::new()?;
-
-        let mut device = open_device(&mut context)?;
-
-        let endpoint = LIBUSB_ENDPOINT_IN | EndpointNumber::Interrupt as u8;
-
-        device.claim_interface(InterfaceNumber::Interrupt as u8)?;
-        device.set_alternate_setting(InterfaceNumber::Interrupt as u8, 0)?;
-
-        let device = Arc::new(device);
-
-        let device_handle = &device;
-
-        const TRANSFERS_COUNT: usize = 4;
-
-        let mut transfers: Vec<Transfer> = Vec::new();
-        
-        let handler = Arc::new(Mutex::new(FramerInterruptHandler::new(sender)));
-        
-        for _ in 0..TRANSFERS_COUNT {
-            let transfer = Transfer::new_interrupt_transfer(
-                device_handle.clone(),
-                endpoint,
-                INTERRUPT_BYTES_MAX,
-                0,
-                Box::new(CallbackWrapper::new(handler.clone())),
-            );
-
-            transfer.submit();
-            transfers.push(transfer);
-        }
-
-        let context = device.context();
-
-        loop {
-            let result = unsafe {
-                ffi::libusb_handle_events(context.as_raw())
-            };
-            if result != 0 {
-                eprintln!("error: libusb_handle_events: {:?}", result);
-                // TODO: I wish I could return an official rusb::Error here,
-                // but the function that turns a raw i32 result into an Error
-                // is private to the rusb crate.
-                return Err(from_libusb(result));
-            }
         }
     }
 }
