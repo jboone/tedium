@@ -1,7 +1,8 @@
 
 #[derive(Copy, Clone, Debug)]
 pub enum DetectionEvent {
-
+    DtmfDigit(char),
+    PulseDigit(char),
 }
 
 pub trait Detector {

@@ -10,7 +10,7 @@ use crate::framer::usb::{EndpointNumber, InterfaceNumber, Transfer, INTERRUPT_BY
 
 use crate::framer::register::*;
 
-use super::usb::TransferHandler;
+use super::{usb::TransferHandler, FramerEvent};
 
 pub(crate) type RegisterAddress = u16;
 pub(crate) type RegisterValue = u8;
@@ -469,11 +469,11 @@ impl<'a> Iterator for Channels<'a> {
 ///////////////////////////////////////////////////////////////////////
 
 struct FramerInterruptHandler {
-    sender: Sender<FramerInterruptMessage>,
+    sender: Sender<FramerEvent>,
 }
 
 impl FramerInterruptHandler {
-    fn new(sender: Sender<FramerInterruptMessage>) -> Self {
+    fn new(sender: Sender<FramerEvent>) -> Self {
         Self {
             sender,
         }
@@ -509,7 +509,7 @@ impl TransferHandler for FramerInterruptHandler {
             };
 
             data[0..actual_length].copy_from_slice(buffer);
-            let message = FramerInterruptMessage::Interrupt(data, actual_length);
+            let message = FramerEvent::Interrupt(data, actual_length);
             if let Err(e) = self.sender.send(message) {
                 eprint!("error: data.sender.send: {:?}", e);
             }
@@ -517,17 +517,12 @@ impl TransferHandler for FramerInterruptHandler {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
-pub enum FramerInterruptMessage {
-    Interrupt([u8; INTERRUPT_BYTES_MAX], usize),
-}
-
 pub struct FramerInterruptThread {
-    endpoint_address: u8,
+    
 }
 
 impl FramerInterruptThread {
-    pub fn run(sender: Sender<FramerInterruptMessage>) -> Result<()> {
+    pub fn run(sender: Sender<FramerEvent>) -> Result<()> {
         let mut context = rusb::Context::new()?;
 
         let mut device = open_device(&mut context)?;

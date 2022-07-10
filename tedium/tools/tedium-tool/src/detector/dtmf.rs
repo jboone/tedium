@@ -108,14 +108,18 @@ impl DetectionStateMachine {
             },
         };
         self.state = new_state;
-
-        if new_tone {
-            eprintln!("{detection:?}");
-        }
-
         self.last_detection = detection;
 
-        None
+        if new_tone {
+            if let Some(digit) = detection {
+                eprintln!("{detection:?}");
+                Some(DetectionEvent::DtmfDigit(digit))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 }
 

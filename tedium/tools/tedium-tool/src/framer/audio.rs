@@ -22,6 +22,8 @@ use rusb::constants::{LIBUSB_TRANSFER_COMPLETED, LIBUSB_SUCCESS};
 
 use thiserror::Error;
 
+use super::FramerEvent;
+
 #[derive(Error, Debug)]
 pub enum PumpError {
     #[error("libusb")]
@@ -85,7 +87,7 @@ impl Default for Patching {
 
         Self {
             map: [
-                [Tone(ToneSource::DialTonePrecise), Idle, Idle, Idle, Idle, Idle, Idle, Idle,],  // Timeslot 00
+                [Idle, Idle, Idle, Idle, Idle, Idle, Idle, Idle,],  // Timeslot 00
                 [Idle, Idle, Idle, Idle, Idle, Idle, Idle, Idle,],
                 [Idle, Idle, Idle, Idle, Idle, Idle, Idle, Idle,],
                 [Idle, Idle, Idle, Idle, Idle, Idle, Idle, Idle,],
@@ -123,23 +125,25 @@ struct AudioProcessor {
     patching: Patching,
     tone_plant: HashMap<ToneSource, Box<dyn ToneGenerator>>,
     detectors: HashMap<TimeslotAddress, Box<dyn Detector>>,
-    message_receiver: Receiver<ProcessorMessage>,
+    processor_receiver: Receiver<ProcessorMessage>,
+    event_sender: Sender<FramerEvent>,
 }
 
 impl AudioProcessor {
-    fn new(message_receiver: Receiver<ProcessorMessage>) -> Self {
+    fn new(processor_receiver: Receiver<ProcessorMessage>, event_sender: Sender<FramerEvent>) -> Self {
         let mut tone_plant: HashMap<ToneSource, Box<dyn ToneGenerator>> = HashMap::new();
         tone_plant.insert(ToneSource::DialTonePrecise, Box::new(DualToneGenerator::new(350.0, 440.0)));
         tone_plant.insert(ToneSource::Ringback, Box::new(DualToneGenerator::new(440.0, 480.0)));
 
         let mut detectors: HashMap<TimeslotAddress, Box<dyn Detector>> = HashMap::new();
-        detectors.insert(TimeslotAddress::new(0, 0), Box::new(dtmf::Detector::new()));
+        detectors.insert(TimeslotAddress::new(0, 1), Box::new(dtmf::Detector::new()));
 
         Self {
             patching: Patching::default(),
             tone_plant,
             detectors,
-            message_receiver,
+            processor_receiver,
+            event_sender,
         }
     }
 
@@ -152,7 +156,7 @@ impl AudioProcessor {
     }
 
     fn process_frame(&mut self, frame_in: &Frame) -> Frame {
-        while let Ok(message) = self.message_receiver.try_recv() {
+        while let Ok(message) = self.processor_receiver.try_recv() {
             self.process_message(message);
         }
 
@@ -162,11 +166,12 @@ impl AudioProcessor {
         }
 
         // Update detectors with new input samples.
-        for (address, detector) in &mut self.detectors {
+        for (&address, detector) in &mut self.detectors {
             let sample_ulaw = frame_in.timeslot(&address);
             let sample_linear = ulaw::decode(sample_ulaw);
             if let Some(output) = detector.advance(sample_linear) {
-                eprintln!("detect: {output:3.0?}");
+                self.event_sender.send(FramerEvent::Digit(address, output));
+                // eprintln!("detect: {output:3.0?}");
             }
         }
 
@@ -199,7 +204,7 @@ impl AudioProcessor {
 
 ///////////////////////////////////////////////////////////////////////
 
-pub fn pump_loopback(patch_receiver: Receiver<ProcessorMessage>) -> Result<(), PumpError> {
+pub fn pump_loopback(patch_receiver: Receiver<ProcessorMessage>, event_sender: Sender<FramerEvent>) -> Result<(), PumpError> {
     let mut context = rusb::Context::new()?;
 
     let mut device = open_device(&mut context)?;
@@ -226,7 +231,7 @@ pub fn pump_loopback(patch_receiver: Receiver<ProcessorMessage>) -> Result<(), P
     let mut transfers_out: Vec<Transfer> = Vec::new();
 
     let (debug_sender, debug_receiver) = unbounded();
-    let handler = Arc::new(Mutex::new(LoopbackFrameHandler::new(patch_receiver, debug_sender)));
+    let handler = Arc::new(Mutex::new(LoopbackFrameHandler::new(patch_receiver, debug_sender, event_sender)));
 
     for _ in 0..TRANSFERS_COUNT {
         let transfer_in = Transfer::new_iso_transfer(
@@ -349,7 +354,7 @@ struct LoopbackFrameHandler {
 }
 
 impl LoopbackFrameHandler {
-    fn new(processor_receiver: Receiver<ProcessorMessage>, debug_sender: Sender<DebugMessage>) -> Self {
+    fn new(processor_receiver: Receiver<ProcessorMessage>, debug_sender: Sender<DebugMessage>, event_sender: Sender<FramerEvent>) -> Self {
         // 40 frames == 5 milliseconds.
         let (unprocessed_frames_producer, unprocessed_frames_consumer) = RingBuffer::new(40).split();
         let (processed_frames_producer, processed_frames_consumer) = RingBuffer::new(40).split();
@@ -359,7 +364,7 @@ impl LoopbackFrameHandler {
             unprocessed_frames_consumer,
             processed_frames_producer,
             processed_frames_consumer,
-            processor: AudioProcessor::new(processor_receiver),
+            processor: AudioProcessor::new(processor_receiver, event_sender),
             debug_sender,
         }
     }

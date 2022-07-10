@@ -4,7 +4,8 @@ use std::time::Duration;
 use clap::{Parser, Subcommand, Args, ArgEnum};
 
 use crossbeam::channel::{unbounded, Receiver};
-use framer::device::{FramerInterruptThread, FramerInterruptMessage};
+use framer::FramerEvent;
+use framer::device::FramerInterruptThread;
 use framer::dump::{registers_dump_raw, registers_dump_global, registers_dump_channel};
 use framer::interrupt::{FramerInterruptStatus, print_framer_interrupt_status};
 use framer::test::{set_test_mode_liu, LIUTestMode, set_test_mode_framer, FramerTestMode};
@@ -118,26 +119,31 @@ fn main() -> Result<()> {
             }
         },
         Commands::Monitor(_) => {
-            let (framer_interrupt_sender, framer_interrupt_receiver) = unbounded();
-
             let (patch_sender, patch_receiver) = unbounded();
+            let (event_sender, event_receiver) = unbounded();
 
             thread::Builder::new()
                 .name("fr_int".to_string())
-                .spawn(move || {
-                    if let Err(e) = FramerInterruptThread::run(framer_interrupt_sender) {
-                        eprintln!("error: framer interrupt pump: {e:?}");
+                .spawn({
+                    let event_sender = event_sender.clone();
+                    move || {
+                        if let Err(e) = FramerInterruptThread::run(event_sender) {
+                            eprintln!("error: framer interrupt pump: {e:?}");
+                        }
+                        eprintln!("done: framer interrupt pump");
                     }
-                    eprintln!("done: framer interrupt pump");
                 }).unwrap();
 
             thread::Builder::new()
                 .name("fr_aud".to_string())
-                .spawn(move || {
-                    if let Err(e) = framer::audio::pump_loopback(patch_receiver) {
-                        eprintln!("error: audio pump: {:?}", e);
+                .spawn({
+                    let event_sender = event_sender.clone();
+                    move || {
+                        if let Err(e) = framer::audio::pump_loopback(patch_receiver, event_sender) {
+                            eprintln!("error: audio pump: {:?}", e);
+                        }
+                        eprintln!("done: audio pump");
                     }
-                    eprintln!("done: audio pump");
                 }).unwrap();
 
             thread::Builder::new()
@@ -169,7 +175,7 @@ fn main() -> Result<()> {
                     }
                 }).unwrap();
 
-            monitor(framer_interrupt_receiver);
+            monitor(event_receiver);
             eprintln!("done: monitor");
         },
     }
@@ -179,14 +185,14 @@ fn main() -> Result<()> {
 
 ///////////////////////////////////////////////////////////////////////
 
-fn monitor(receiver: Receiver<FramerInterruptMessage>) {
+fn monitor(receiver: Receiver<FramerEvent>) {
     use crate::framer::register::RSAR;
 
     let mut rx_sig_rsars = [[RSAR::new(); 24]; 8];
 
     while let Ok(m) = receiver.recv() {
         match m {
-            FramerInterruptMessage::Interrupt(b, n) => {
+            FramerEvent::Interrupt(b, n) => {
                 let truncated = &b[0..n];
                 if let Ok(status) = FramerInterruptStatus::from_slice(truncated) {
                     print_framer_interrupt_status(&status);
@@ -208,6 +214,9 @@ fn monitor(receiver: Receiver<FramerInterruptMessage>) {
                 } else {
                     eprintln!("framer: interrupt: bad struct: {b:?}");
                 }
+            },
+            FramerEvent::Digit(address, event) => {
+                eprintln!("{address:?} {event:?}");
             },
         }
     }
