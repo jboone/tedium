@@ -279,12 +279,12 @@ pub fn pump_loopback(patch_receiver: Receiver<ProcessorMessage>, event_sender: S
                             }
                             let range_str = range_str.iter().cloned().collect::<String>();
 
-                            eprint!("\n{:6}.{:06}: {} ", elapsed.as_secs(), elapsed.subsec_micros(), range_str);
+                            eprint!("{:6}.{:06}: {}\n", elapsed.as_secs(), elapsed.subsec_micros(), range_str);
                             tx_fifo_level_range = r;
                         }
                     },
                     DebugMessage::FramerStatistics(p, c) => {
-                        eprint!("\n{p:?} {c:?}");
+                        eprint!("{p:?} {c:?}\n");
                     },
                 }
             }
