@@ -237,6 +237,49 @@ impl Default for RobbedBitFrame {
 }
 
 #[derive(Copy, Clone, Debug)]
+struct RobbedBitDebouncer {
+    state: RobbedBitFrame,
+    accumulator: RobbedBitFrame,
+    history: RobbedBitFrame,
+}
+
+impl RobbedBitDebouncer {
+    fn new() -> Self {
+        Self {
+            state: RobbedBitFrame::default(),
+            accumulator: RobbedBitFrame::default(),
+            history: RobbedBitFrame::default(),
+        }
+    }
+
+    fn new_frame(&mut self, frame_count: u32) {
+        self.accumulator = RobbedBitFrame::from_timestamp(frame_count);
+    }
+
+    fn process_frame<F>(&mut self, frame: &InternalFrame, channel_index: usize, change_fn: F)
+        where F: Fn(u32, TimeslotAddress, u8)
+    {
+        if self.accumulator.process_frame(frame, channel_index) {
+            // We have a valid frame of RBS data.
+            // Now debounce, only allowing changes that last for at least two superframes.
+            for timeslot_index in 0..24 {
+                let rbs_now = self.accumulator.timeslot[timeslot_index];
+                let rbs_last = self.history.timeslot[timeslot_index];
+                let rbs_state = &mut self.state.timeslot[timeslot_index];
+                if rbs_now == rbs_last && rbs_now != *rbs_state {
+                    let timestamp_changed = self.history.superframe_frame_count;
+                    let timeslot_address = TimeslotAddress::new(channel_index, timeslot_index);
+                    change_fn(timestamp_changed, timeslot_address, rbs_now);
+                    *rbs_state = rbs_now;
+                }
+            }
+
+            self.history = self.accumulator;
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
 struct ExtendedSuperFrameState {
     superframe_frame_count: u32,
     framing_bits: u32,
@@ -321,17 +364,13 @@ impl FrameCountDiscontinuityMonitor {
 
 #[derive(Copy, Clone, Debug)]
 struct SuperframeState {
-    rbs_state: RobbedBitFrame,
-    rbs_accumulator: RobbedBitFrame,
-    rbs_history: RobbedBitFrame,
+    robbed_bit_debouncer: RobbedBitDebouncer,
 }
 
 impl Default for SuperframeState {
     fn default() -> Self {
         Self {
-            rbs_state: RobbedBitFrame::default(),
-            rbs_accumulator: RobbedBitFrame::default(),
-            rbs_history: RobbedBitFrame::default(),
+            robbed_bit_debouncer: RobbedBitDebouncer::new(),
         }
     }
 }
@@ -365,25 +404,11 @@ impl SignalingProcessor {
             let mf_bit = (frame_in.mf_bits as u32 >> channel_index) & 1;
             let mf = mf_bit != 0;
             if mf {
-                state.rbs_accumulator = RobbedBitFrame::from_timestamp(frame_in.frame_count);
+                state.robbed_bit_debouncer.new_frame(frame_in.frame_count);
             }
-
-            if state.rbs_accumulator.process_frame(&frame_in, channel_index) {
-                // We have a valid frame of RBS data.
-                // Now debounce, only allowing changes that last for at least two superframes.
-                for timeslot_index in 0..24 {
-                    let rbs_now = state.rbs_accumulator.timeslot[timeslot_index];
-                    let rbs_last = state.rbs_history.timeslot[timeslot_index];
-                    let rbs_state = &mut state.rbs_state.timeslot[timeslot_index];
-                    if rbs_now == rbs_last && rbs_now != *rbs_state {
-                        let timestamp_changed = state.rbs_history.superframe_frame_count;
-                        eprintln!("{channel_index}.{timeslot_index} {timestamp_changed} {rbs_state:04b} => {rbs_now:04b}");
-                        *rbs_state = rbs_now;
-                    }
-                }
-
-                state.rbs_history = state.rbs_accumulator;
-            }
+            state.robbed_bit_debouncer.process_frame(&frame_in, channel_index, |timestamp_changed, timeslot_address, rbs_state| {
+                eprintln!("{timeslot_address:?} {timestamp_changed} {rbs_state:04b}");
+            });
         }
 
         // Update detectors with new input samples.
