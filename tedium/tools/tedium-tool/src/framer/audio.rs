@@ -236,6 +236,36 @@ impl Default for RobbedBitFrame {
     }
 }
 
+struct FrameCountDiscontinuityMonitor {
+    last_frame_count: u32,
+}
+
+impl FrameCountDiscontinuityMonitor {
+    fn new() -> Self {
+        Self {
+            last_frame_count: 0,
+        }
+    }
+
+    fn update(&mut self, frame_count: u32) -> Option<u32> {
+        let result = if self.last_frame_count != 0 {
+            let expected_frame_count = self.last_frame_count.wrapping_add(1);
+            if frame_count != expected_frame_count {
+                let missing_frames_count = frame_count.wrapping_sub(expected_frame_count);
+                Some(missing_frames_count)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        self.last_frame_count = frame_count;
+
+        result
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 struct SuperframeState {
     rbs_state: RobbedBitFrame,
@@ -257,6 +287,7 @@ struct SignalingProcessor {
     detectors: HashMap<TimeslotAddress, Box<dyn Detector>>,
     event_sender: Sender<FramerEvent>,
     superframe_state: [SuperframeState; 8],
+    frame_count_discontinuity_monitor: FrameCountDiscontinuityMonitor,
 }
 
 impl SignalingProcessor {
@@ -268,10 +299,15 @@ impl SignalingProcessor {
             detectors,
             event_sender,
             superframe_state: [SuperframeState::default(); 8],
+            frame_count_discontinuity_monitor: FrameCountDiscontinuityMonitor::new(),
         }
     }
 
     fn process_frame(&mut self, frame_in: &InternalFrame) {
+        if let Some(missing_frames_count) = self.frame_count_discontinuity_monitor.update(frame_in.frame_count) {
+            eprintln!("{:?}: dropped {:?} rx frames", frame_in.frame_count, missing_frames_count);
+        }
+
         for (channel_index, state) in self.superframe_state.iter_mut().enumerate() {
             let mf_bit = (frame_in.mf_bits as u32 >> channel_index) & 1;
             let mf = mf_bit != 0;
