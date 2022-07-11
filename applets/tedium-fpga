@@ -42,6 +42,7 @@ class RxFrameReport(Report):
     """
     LAYOUT = [
         ('frame_count', 32),
+        ('mf_bits',      8),
     ]
 
     def __init__(self):
@@ -128,6 +129,7 @@ def usb_framer(platform, m: Module, usb: USBDevice, ep_out: USBIsochronousOutEnd
     rx_timeslots = [rx_block.timeslot for rx_block in rx_blocks]
 
     rx_sclks = Cat([block.sclk for block in rx_blocks])
+    rx_mfs = Cat([block.timeslot.mf for block in rx_blocks])
     m.d.comb += sclk.eq(rx_sclks.bit_select(sclk_index, 1))
     m.d.comb += serclk.eq(sclk)
 
@@ -169,6 +171,7 @@ def usb_framer(platform, m: Module, usb: USBDevice, ep_out: USBIsochronousOutEnd
     with m.If(system_timing.iface.frame_strobe):
         m.d.sync += [
             rx_frame_report.frame_count.eq(rx_frame_report.frame_count + 1),
+            rx_frame_report.mf_bits.eq(rx_mfs),
         ]
 
 class Device(Elaboratable):

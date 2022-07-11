@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::mem::size_of;
 use std::slice;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::Duration;
 use std::thread;
 
 use crate::codec::ulaw;
@@ -14,7 +14,7 @@ use crate::generator::dual_tone::DualToneGenerator;
 
 use audio_thread_priority::promote_current_thread_to_real_time;
 use bytemuck::{Pod, Zeroable};
-use crossbeam::channel::{unbounded, Sender, Receiver};
+use crossbeam::channel::{Sender, Receiver};
 use ringbuf::{RingBuffer, Consumer, Producer};
 use rusb::ffi::{libusb_set_iso_packet_lengths, libusb_get_iso_packet_buffer};
 use rusb::{ffi, UsbContext};
@@ -124,26 +124,19 @@ pub enum ProcessorMessage {
 struct AudioProcessor {
     patching: Patching,
     tone_plant: HashMap<ToneSource, Box<dyn ToneGenerator>>,
-    detectors: HashMap<TimeslotAddress, Box<dyn Detector>>,
     processor_receiver: Receiver<ProcessorMessage>,
-    event_sender: Sender<FramerEvent>,
 }
 
 impl AudioProcessor {
-    fn new(processor_receiver: Receiver<ProcessorMessage>, event_sender: Sender<FramerEvent>) -> Self {
+    fn new(processor_receiver: Receiver<ProcessorMessage>) -> Self {
         let mut tone_plant: HashMap<ToneSource, Box<dyn ToneGenerator>> = HashMap::new();
         tone_plant.insert(ToneSource::DialTonePrecise, Box::new(DualToneGenerator::new(350.0, 440.0)));
         tone_plant.insert(ToneSource::Ringback, Box::new(DualToneGenerator::new(440.0, 480.0)));
 
-        let mut detectors: HashMap<TimeslotAddress, Box<dyn Detector>> = HashMap::new();
-        detectors.insert(TimeslotAddress::new(0, 1), Box::new(dtmf::Detector::new()));
-
         Self {
             patching: Patching::default(),
             tone_plant,
-            detectors,
             processor_receiver,
-            event_sender,
         }
     }
 
@@ -163,16 +156,6 @@ impl AudioProcessor {
         // Update generator outputs.
         for generator in self.tone_plant.values_mut() {
             generator.advance();
-        }
-
-        // Update detectors with new input samples.
-        for (&address, detector) in &mut self.detectors {
-            let sample_ulaw = frame_in.timeslot(&address);
-            let sample_linear = ulaw::decode(sample_ulaw);
-            if let Some(output) = detector.advance(sample_linear) {
-                self.event_sender.send(FramerEvent::Digit(address, output));
-                // eprintln!("detect: {output:3.0?}");
-            }
         }
 
         // Compute output samples.
@@ -199,6 +182,36 @@ impl AudioProcessor {
         }
 
         frame_out
+    }
+}
+
+struct SignalingProcessor {
+    detectors: HashMap<TimeslotAddress, Box<dyn Detector>>,
+    event_sender: Sender<FramerEvent>,
+}
+
+impl SignalingProcessor {
+    fn new(event_sender: Sender<FramerEvent>) -> Self {
+        let mut detectors: HashMap<TimeslotAddress, Box<dyn Detector>> = HashMap::new();
+        detectors.insert(TimeslotAddress::new(0, 1), Box::new(dtmf::Detector::new()));
+
+        Self {
+            detectors,
+            event_sender,
+        }
+    }
+
+    fn process_frame(&mut self, frame_in: &InternalFrame) {
+        // Update detectors with new input samples.
+        for (&address, detector) in &mut self.detectors {
+            let sample_ulaw = frame_in.frame.timeslot(&address);
+            let sample_linear = ulaw::decode(sample_ulaw);
+            if let Some(output) = detector.advance(sample_linear) {
+                if let Err(e) = self.event_sender.send(FramerEvent::Digit(address, output)) {
+                    eprintln!("SignalingProcessor: event_sender.send(): {e:?}");
+                }
+            }
+        }
     }
 }
 
@@ -310,6 +323,7 @@ impl Default for Frame {
 struct InternalFrame {
     frame: Frame,
     frame_count: u32,
+    mf_bits: u8,
 }
 
 struct LoopbackFrameHandler {
@@ -324,15 +338,33 @@ struct LoopbackFrameHandler {
 impl LoopbackFrameHandler {
     fn new(processor_receiver: Receiver<ProcessorMessage>, debug_sender: Sender<DebugMessage>, event_sender: Sender<FramerEvent>) -> Self {
         // 40 frames == 5 milliseconds.
-        let (unprocessed_frames_producer, unprocessed_frames_consumer) = RingBuffer::new(40).split();
-        let (processed_frames_producer, processed_frames_consumer) = RingBuffer::new(40).split();
+        const RINGBUFFER_FRAMES: usize = 40;
+        let (unprocessed_frames_producer, unprocessed_frames_consumer) = RingBuffer::new(RINGBUFFER_FRAMES).split();
+        let (signaling_frames_producer, mut signaling_frames_consumer) = RingBuffer::new(RINGBUFFER_FRAMES).split();
+        let (processed_frames_producer, processed_frames_consumer) = RingBuffer::new(RINGBUFFER_FRAMES).split();
+
+        thread::Builder::new()
+            .spawn({
+                let event_sender = event_sender.clone();
+                move || {
+                    let mut processor = SignalingProcessor::new(event_sender);
+                    loop {
+                        while let Some(unprocessed_frame) = signaling_frames_consumer.pop() {
+                            processor.process_frame(&unprocessed_frame);
+                        }
+                        // TODO: This is cheeseball. Find a better way to wake on new work
+                        // available in the queue!
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                }
+            }).unwrap();
 
         Self {
-            rx_packet_processor: RxPacketProcessor::new(unprocessed_frames_producer, debug_sender.clone()),
+            rx_packet_processor: RxPacketProcessor::new(unprocessed_frames_producer, signaling_frames_producer, debug_sender.clone()),
             unprocessed_frames_consumer,
             processed_frames_producer,
             processed_frames_consumer,
-            processor: AudioProcessor::new(processor_receiver, event_sender),
+            processor: AudioProcessor::new(processor_receiver),
             debug_sender,
         }
     }
@@ -345,6 +377,7 @@ impl LoopbackFrameHandler {
 #[allow(dead_code)]
 struct RxFrameReport {
     frame_count: u32,
+    mf_bits: u8,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -480,8 +513,10 @@ impl Default for FramerCumulativeStatistics {
 
 struct RxPacketProcessor {
     unprocessed_frames_producer: Producer<InternalFrame>,
+    signaling_frames_producer: Producer<InternalFrame>,
     framer_periodic_statistics: FramerPeriodicStatistics,
     framer_cumulative_statistics: FramerCumulativeStatistics,
+    signaling_frames_drop_count: u32,
     sof_count_next: u32,
     frame_count_next: u32,
     tx_fifo_level_min: u8,
@@ -490,11 +525,13 @@ struct RxPacketProcessor {
 }
 
 impl RxPacketProcessor {
-    fn new(frames_in: Producer<InternalFrame>, debug_sender: Sender<DebugMessage>) -> Self {
+    fn new(frames_in: Producer<InternalFrame>, signaling_frames_producer: Producer<InternalFrame>, debug_sender: Sender<DebugMessage>) -> Self {
         Self {
             unprocessed_frames_producer: frames_in,
+            signaling_frames_producer,
             framer_periodic_statistics: FramerPeriodicStatistics::default(),
             framer_cumulative_statistics: FramerCumulativeStatistics::default(),
+            signaling_frames_drop_count: 0,
             sof_count_next: 0,
             frame_count_next: 0,
             tx_fifo_level_min: u8::MAX,
@@ -546,9 +583,13 @@ impl RxPacketProcessor {
             let frame = InternalFrame {
                 frame: frame_in.frame,
                 frame_count: frame_in.report.frame_count,
+                mf_bits: frame_in.report.mf_bits,
             };
             if let Err(_) = self.unprocessed_frames_producer.push(frame) {
                 self.framer_cumulative_statistics.ringbuf_full_drop_count += 1;
+            }
+            if let Err(_) = self.signaling_frames_producer.push(frame) {
+                self.signaling_frames_drop_count += 1;
             }
         }
     }
@@ -605,6 +646,7 @@ impl LoopbackFrameHandler {
             self.processed_frames_producer.push(InternalFrame {
                 frame: processed_frame,
                 frame_count: unprocessed_frame.frame_count,
+                mf_bits: unprocessed_frame.mf_bits,
             }).unwrap();
         }
     }
