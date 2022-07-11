@@ -338,10 +338,11 @@ struct LoopbackFrameHandler {
 impl LoopbackFrameHandler {
     fn new(processor_receiver: Receiver<ProcessorMessage>, debug_sender: Sender<DebugMessage>, event_sender: Sender<FramerEvent>) -> Self {
         // 40 frames == 5 milliseconds.
-        const RINGBUFFER_FRAMES: usize = 40;
-        let (unprocessed_frames_producer, unprocessed_frames_consumer) = RingBuffer::new(RINGBUFFER_FRAMES).split();
-        let (signaling_frames_producer, mut signaling_frames_consumer) = RingBuffer::new(RINGBUFFER_FRAMES).split();
-        let (processed_frames_producer, processed_frames_consumer) = RingBuffer::new(RINGBUFFER_FRAMES).split();
+        const AUDIO_RINGBUFFER_FRAMES: usize = 40;
+        const SIGNALING_RINGBUFFER_FRAMES: usize = 200; // Give the lower-priority signaling thread more time to do work.
+        let (unprocessed_frames_producer, unprocessed_frames_consumer) = RingBuffer::new(AUDIO_RINGBUFFER_FRAMES).split();
+        let (signaling_frames_producer, mut signaling_frames_consumer) = RingBuffer::new(SIGNALING_RINGBUFFER_FRAMES).split();
+        let (processed_frames_producer, processed_frames_consumer) = RingBuffer::new(AUDIO_RINGBUFFER_FRAMES).split();
 
         thread::Builder::new()
             .spawn({
@@ -354,7 +355,7 @@ impl LoopbackFrameHandler {
                         }
                         // TODO: This is cheeseball. Find a better way to wake on new work
                         // available in the queue!
-                        thread::sleep(Duration::from_millis(1));
+                        thread::sleep(Duration::from_millis(5));
                     }
                 }
             }).unwrap();
