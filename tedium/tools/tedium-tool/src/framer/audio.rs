@@ -185,9 +185,78 @@ impl AudioProcessor {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+struct RobbedBitFrame {
+    timeslot: [u8; 24],
+    superframe_frame_count: u32,
+    bits_collected: u8,
+}
+
+impl RobbedBitFrame {
+    fn from_timestamp(superframe_frame_count: u32) -> Self {
+        Self {
+            timeslot: [0; 24],
+            superframe_frame_count,
+            bits_collected: 0,
+        }
+    }
+
+    fn process_frame(&mut self, frame: &InternalFrame, channel: usize) -> bool {
+        let frame_in_superframe = frame.frame_count.wrapping_sub(self.superframe_frame_count);
+        if frame_in_superframe >= 24 {
+            return false;
+        }
+
+        let rbs_frame = (frame_in_superframe % 6) == 5;
+        if !rbs_frame {
+            return false;
+        }
+
+        self.bits_collected |= 1 << (frame_in_superframe / 6);
+        for timeslot_index in 0..24 {
+            let address = TimeslotAddress::new(channel, timeslot_index);
+            let timeslot_value = frame.frame.timeslot(&address);
+            let rbs_bit = timeslot_value & 1;
+            self.timeslot[timeslot_index] <<= 1;
+            self.timeslot[timeslot_index] |= rbs_bit;
+        }
+
+        let rbs_d_frame = frame_in_superframe == 23;
+        rbs_d_frame && (self.bits_collected == 0b1111)
+    }
+}
+
+impl Default for RobbedBitFrame {
+    fn default() -> Self {
+        Self {
+            timeslot: [0b0101; 24],
+            superframe_frame_count: 0,
+            bits_collected: 0,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+struct SuperframeState {
+    rbs_state: RobbedBitFrame,
+    rbs_accumulator: RobbedBitFrame,
+    rbs_history: RobbedBitFrame,
+}
+
+impl Default for SuperframeState {
+    fn default() -> Self {
+        Self {
+            rbs_state: RobbedBitFrame::default(),
+            rbs_accumulator: RobbedBitFrame::default(),
+            rbs_history: RobbedBitFrame::default(),
+        }
+    }
+}
+
 struct SignalingProcessor {
     detectors: HashMap<TimeslotAddress, Box<dyn Detector>>,
     event_sender: Sender<FramerEvent>,
+    superframe_state: [SuperframeState; 8],
 }
 
 impl SignalingProcessor {
@@ -198,10 +267,36 @@ impl SignalingProcessor {
         Self {
             detectors,
             event_sender,
+            superframe_state: [SuperframeState::default(); 8],
         }
     }
 
     fn process_frame(&mut self, frame_in: &InternalFrame) {
+        for (channel_index, state) in self.superframe_state.iter_mut().enumerate() {
+            let mf_bit = (frame_in.mf_bits as u32 >> channel_index) & 1;
+            let mf = mf_bit != 0;
+            if mf {
+                state.rbs_accumulator = RobbedBitFrame::from_timestamp(frame_in.frame_count);
+            }
+
+            if state.rbs_accumulator.process_frame(&frame_in, channel_index) {
+                // We have a valid frame of RBS data.
+                // Now debounce, only allowing changes that last for at least two superframes.
+                for timeslot_index in 0..24 {
+                    let rbs_now = state.rbs_accumulator.timeslot[timeslot_index];
+                    let rbs_last = state.rbs_history.timeslot[timeslot_index];
+                    let rbs_state = &mut state.rbs_state.timeslot[timeslot_index];
+                    if rbs_now == rbs_last && rbs_now != *rbs_state {
+                        let timestamp_changed = state.rbs_history.superframe_frame_count;
+                        eprintln!("{channel_index}.{timeslot_index} {timestamp_changed} {rbs_state:04b} => {rbs_now:04b}");
+                        *rbs_state = rbs_now;
+                    }
+                }
+
+                state.rbs_history = state.rbs_accumulator;
+            }
+        }
+
         // Update detectors with new input samples.
         for (&address, detector) in &mut self.detectors {
             let sample_ulaw = frame_in.frame.timeslot(&address);
