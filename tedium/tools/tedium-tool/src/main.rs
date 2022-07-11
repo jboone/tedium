@@ -223,12 +223,12 @@ fn main() -> Result<()> {
 ///////////////////////////////////////////////////////////////////////
 
 #[derive(Copy, Clone, Debug)]
-struct LineState {
+struct LineStateInterrupt {
     timestamp: Instant,
     abcd: u8,
 }
 
-impl Default for LineState {
+impl Default for LineStateInterrupt {
     fn default() -> Self {
         Self {
             timestamp: Instant::now(),
@@ -237,7 +237,7 @@ impl Default for LineState {
     }
 }
 
-impl LineState {
+impl LineStateInterrupt {
     fn set_state(&mut self, timestamp: Instant, rsar: RSAR) -> Option<(Duration, bool)> {
         let new_abcd = (rsar.A() << 3) | (rsar.B() << 2) | (rsar.C() << 1) | (rsar.D() << 0);
         if new_abcd != self.abcd {
@@ -255,8 +255,43 @@ impl LineState {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+struct LineStateRobbedBitState {
+    frame_count: u32,
+    abcd: u8,
+}
+
+impl Default for LineStateRobbedBitState {
+    fn default() -> Self {
+        Self {
+            frame_count: 0,
+            abcd: 0b0101,
+        }
+    }
+}
+
+impl LineStateRobbedBitState {
+    fn set_state(&mut self, frame_count: u32, rbs_state: u8) -> Option<(Duration, bool)> {
+        let new_abcd = rbs_state & 0x0f;
+        if new_abcd != self.abcd {
+            let frame_count_diff = frame_count.wrapping_sub(self.frame_count);
+            let duration = Duration::from_millis((frame_count_diff / 8) as u64);
+            self.frame_count = frame_count;
+            self.abcd = new_abcd;
+            Some((duration, self.off_hook()))
+        } else {
+            None
+        }
+    }
+
+    fn off_hook(&self) -> bool {
+        self.abcd & 0x0c == 0b1100
+    }
+}
+
 fn monitor(receiver: Receiver<FramerEvent>) {
-    let mut line_state = [[LineState::default(); 24]; 8];
+    let mut line_state_interrupt = [[LineStateInterrupt::default(); 24]; 8];
+    let mut line_state_robbed_bit_state = [[LineStateRobbedBitState::default(); 24]; 8];
 
     while let Ok(m) = receiver.recv() {
         match m {
@@ -271,8 +306,8 @@ fn monitor(receiver: Receiver<FramerEvent>) {
                         if let Some(sig) = t1frame.sig {
                             for timeslot_index in 0..24 {
                                 let rsar = sig.rsars[timeslot_index];
-                                if let Some((duration, off_hook)) = line_state[channel_index][timeslot_index].set_state(timestamp, rsar) {
-                                    eprintln!("{channel_index}.{timeslot_index:02} {duration:?} {off_hook:?}");
+                                if let Some((duration, off_hook)) = line_state_interrupt[channel_index][timeslot_index].set_state(timestamp, rsar) {
+                                    eprintln!("Interrupt: {channel_index}.{timeslot_index:02} {duration:?} {off_hook:?}");
                                 }
                             }
                         }
@@ -282,7 +317,15 @@ fn monitor(receiver: Receiver<FramerEvent>) {
                 }
             },
             FramerEvent::Digit(address, event) => {
-                eprintln!("{address:?} {event:?}");
+                eprintln!("Digit {address:?}: {event:?}");
+            },
+            FramerEvent::RobbedBitState(frame_count, timeslot_address, rbs_state) => {
+                let (channel_index, timeslot_index) = (timeslot_address.channel, timeslot_address.timeslot);
+                if let Some((duration, off_hook)) = line_state_robbed_bit_state[timeslot_address.channel][timeslot_address.timeslot].set_state(frame_count, rbs_state) {
+                    let duration_state_s = if off_hook { " on-hook" } else { "off-hook" };
+                    let now_state_s = if off_hook { "off-hook" } else { "on-hook " };
+                    eprintln!("RobbedBitState: {channel_index}.{timeslot_index:02} {duration_state_s} for {duration:?}, now {now_state_s}");
+                }
             },
         }
     }

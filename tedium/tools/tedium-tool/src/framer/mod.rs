@@ -16,4 +16,5 @@ mod usb;
 pub enum FramerEvent {
     Interrupt { timestamp: Instant, data: [u8; usb::INTERRUPT_BYTES_MAX], length: usize },
     Digit(TimeslotAddress, DetectionEvent),
+    RobbedBitState(u32, TimeslotAddress, u8),
 }

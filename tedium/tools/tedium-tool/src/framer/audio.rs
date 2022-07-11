@@ -39,8 +39,8 @@ const TIMESLOTS_PER_CHANNEL: usize = 24;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct TimeslotAddress {
-    channel: usize,
-    timeslot: usize,
+    pub channel: usize,
+    pub timeslot: usize,
 }
 
 impl TimeslotAddress {
@@ -407,7 +407,9 @@ impl SignalingProcessor {
                 state.robbed_bit_debouncer.new_frame(frame_in.frame_count);
             }
             state.robbed_bit_debouncer.process_frame(&frame_in, channel_index, |timestamp_changed, timeslot_address, rbs_state| {
-                eprintln!("{timeslot_address:?} {timestamp_changed} {rbs_state:04b}");
+                if let Err(e) = self.event_sender.send(FramerEvent::RobbedBitState(timestamp_changed, timeslot_address, rbs_state)) {
+                    eprintln!("SignalingProcessor: event_sender.send(): {e:?}");
+                }
             });
         }
 
