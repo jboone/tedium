@@ -148,6 +148,8 @@ fn main() -> Result<()> {
                     }
                 }).unwrap();
 
+            const DEBUG_PRINT: bool = false;
+
             thread::Builder::new()
                 .name("fr_dbg".into())
                 .spawn(move || {
@@ -157,7 +159,7 @@ fn main() -> Result<()> {
                     for message in debug_receiver {
                         match message {
                             DebugMessage::TxFIFORange(r) => {
-                                if r != tx_fifo_level_range {
+                                if DEBUG_PRINT && r != tx_fifo_level_range {
                                     let elapsed = instant_start.elapsed();
 
                                     let mut range_str = ['\u{2500}'; 32];
@@ -173,7 +175,9 @@ fn main() -> Result<()> {
                                 }
                             },
                             DebugMessage::FramerStatistics(p, c) => {
-                                eprint!("{p:?} {c:?}\n");
+                                if DEBUG_PRINT {
+                                    eprint!("{p:?} {c:?}\n");
+                                }
                             },
                         }
                     }
