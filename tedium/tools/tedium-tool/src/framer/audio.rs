@@ -236,6 +236,59 @@ impl Default for RobbedBitFrame {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+struct ExtendedSuperFrameState {
+    superframe_frame_count: u32,
+    framing_bits: u32,
+    crc_bits: u32,
+    fdl_bits: u32,
+    bits_collected: u32,
+}
+
+impl ExtendedSuperFrameState {
+    fn from_timestamp(superframe_frame_count: u32) -> Self {
+        Self {
+            superframe_frame_count,
+            framing_bits: 0,
+            crc_bits: 0,
+            fdl_bits: 0,
+            bits_collected: 0,
+        }
+    }
+
+    fn process_frame(&mut self, frame: &InternalFrame, mf: bool) -> bool {
+        let frame_in_superframe = frame.frame_count.wrapping_sub(self.superframe_frame_count);
+        if frame_in_superframe >= 24 {
+            return false;
+        }
+
+        let mf_phase = frame_in_superframe & 3;
+        let mf_bit = mf as u32;
+        match mf_phase {
+            0 | 2 => self.fdl_bits     = (self.fdl_bits     << 1) | mf_bit,
+            1     => self.crc_bits     = (self.crc_bits     << 1) | mf_bit,
+            3     => self.framing_bits = (self.framing_bits << 1) | mf_bit,
+            _     => unreachable!(),
+        }
+
+        let last_frame = frame_in_superframe == 23;
+        let frame_valid = self.bits_collected == ((1 << 23) - 1);
+        last_frame && frame_valid
+    }
+}
+
+impl Default for ExtendedSuperFrameState {
+    fn default() -> Self {
+        Self {
+            superframe_frame_count: 0,
+            framing_bits: 0,
+            crc_bits: 0,
+            fdl_bits: 0,
+            bits_collected: 0,
+        }
+    }
+}
+
 struct FrameCountDiscontinuityMonitor {
     last_frame_count: u32,
 }
