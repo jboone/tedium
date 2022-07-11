@@ -589,6 +589,7 @@ impl RxPacketProcessor {
                 self.framer_cumulative_statistics.ringbuf_full_drop_count += 1;
             }
             if let Err(_) = self.signaling_frames_producer.push(frame) {
+                eprintln!("signaling_frames ringbuf full");
                 self.signaling_frames_drop_count += 1;
             }
         }
